@@ -229,37 +229,51 @@ export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }:
     })
   }
 
-  const handleCreateOrder = () => {
-    const newOrderId = Math.floor(Math.random() * 10000) + 1000
-    setCreatedOrderId(newOrderId)
-
-    const locker = mockLockers[Math.floor(Math.random() * mockLockers.length)]
-    const cell = `${String.fromCharCode(65 + Math.floor(Math.random() * 5))}-${String(Math.floor(Math.random() * 20) + 1).padStart(2, "0")}`
-
-    setRecipientOrderInfo({
-      orderId: newOrderId,
-      locker: locker.address,
-      cell,
-    })
-
-    setClientOrders([
-      ...clientOrders,
-      {
-        id: newOrderId,
-        parcelType,
-        cellSize,
-        status: "created",
-        canCancel: true,
-      },
-    ])
-
-    handleAction("client", "create_order", {
-      entity_id: newOrderId,
+  const handleCreateOrder = async () => {
+    const data = {
+      client_user_id: parseInt(selectedClientId),
       parcel_type: parcelType,
       cell_size: cellSize,
       sender_delivery: senderDelivery,
       recipient_delivery: recipientDelivery,
-    })
+    }
+
+    try {
+      const response = await fetch('http://91.135.156.173:8000/api/client/create_order_request', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(data),
+      })
+
+      if (!response.ok) {
+        throw new Error('Network response was not ok')
+      }
+
+      const result = await response.json()
+
+      // Предполагаем, что API возвращает order_id в result
+      const orderId = result.order_id || result.id
+      setCreatedOrderId(orderId)
+
+      // Добавить заказ в список клиента
+      setClientOrders([
+        ...clientOrders,
+        {
+          id: orderId,
+          parcelType: result.parcel_type,
+          cellSize: result.cell_size,
+          status: "created",
+          canCancel: true,
+        },
+      ])
+
+      handleAction("client", "create_order", result)
+    } catch (error) {
+      console.error('Error creating order:', error)
+      // Здесь можно добавить уведомление об ошибке пользователю
+    }
   }
 
   const handleTakeOrder = (orderId: number) => {
