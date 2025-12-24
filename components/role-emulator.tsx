@@ -230,6 +230,7 @@ export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }:
   }
 
   const handleCreateOrder = async () => {
+    const newOrderId = Math.floor(Math.random() * 10000) + 1000
     const data = {
       client_user_id: parseInt(selectedClientId),
       parcel_type: parcelType,
@@ -253,17 +254,16 @@ export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }:
 
       const result = await response.json()
 
-      // Предполагаем, что API возвращает order_id в result
-      const orderId = result.order_id || result.id
-      setCreatedOrderId(orderId)
+      // Используем локальный ID, так как API может не возвращать order_id
+      setCreatedOrderId(newOrderId)
 
       // Добавить заказ в список клиента
       setClientOrders([
         ...clientOrders,
         {
-          id: orderId,
-          parcelType: result.parcel_type,
-          cellSize: result.cell_size,
+          id: newOrderId,
+          parcelType: parcelType,
+          cellSize: cellSize,
           status: "created",
           canCancel: true,
         },
@@ -467,11 +467,32 @@ export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }:
     handleAction("driver", "place_parcel_in_cell", { order_id: orderId, cell: cellNumber })
   }
 
-  const handleCancelClientOrder = (orderId: number) => {
-    setClientOrders(
-      clientOrders.map((order) => (order.id === orderId ? { ...order, status: "cancelled", canCancel: false } : order)),
-    )
-    handleAction("client", "cancel_order", { order_id: orderId })
+  const handleCancelClientOrder = async (orderId: number) => {
+    try {
+      const response = await fetch('http://91.135.156.173:8000/api/client/cancel_order_request', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ order_id: orderId }),
+      })
+
+      if (!response.ok) {
+        throw new Error('Network response was not ok')
+      }
+
+      const result = await response.json()
+
+      // Обновляем локальный статус
+      setClientOrders(
+        clientOrders.map((order) => (order.id === orderId ? { ...order, status: "cancelled", canCancel: false } : order)),
+      )
+
+      handleAction("client", "cancel_order", result)
+    } catch (error) {
+      console.error('Error cancelling order:', error)
+      // Возможно, показать ошибку пользователю
+    }
   }
 
   const handleCancelCourierOrder = (orderId: number) => {
@@ -993,13 +1014,13 @@ export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }:
                 {clientOrders.length > 0 && (
                   <div className="mt-6">
                     <h3 className="font-semibold mb-3">{t.client.myOrders}</h3>
-                    <div className="border rounded-lg overflow-hidden">
+                    <div className="border rounded-lg overflow-x-auto">
                       <Table>
                         <TableHeader>
                           <TableRow>
                             <TableHead>{t.client.orderId}</TableHead>
-                            <TableHead>{t.client.parcelType}</TableHead>
-                            <TableHead>{t.client.cellSize}</TableHead>
+                            <TableHead className="hidden md:table-cell">{t.client.parcelType}</TableHead>
+                            <TableHead className="hidden md:table-cell">{t.client.cellSize}</TableHead>
                             <TableHead>{t.client.status}</TableHead>
                             <TableHead></TableHead>
                           </TableRow>
@@ -1008,8 +1029,8 @@ export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }:
                           {clientOrders.map((order) => (
                             <TableRow key={order.id}>
                               <TableCell>{order.id}</TableCell>
-                              <TableCell>{order.ParcelType === "parcel" ? t.client.parcel : t.client.letter}</TableCell>
-                              <TableCell>{order.cellSize}</TableCell>
+                              <TableCell className="hidden md:table-cell">{order.parcelType === "parcel" ? t.client.parcel : t.client.letter}</TableCell>
+                              <TableCell className="hidden md:table-cell">{order.cellSize}</TableCell>
                               <TableCell>
                                 <Badge variant={order.status === "cancelled" ? "destructive" : "secondary"}>
                                   {order.status}
