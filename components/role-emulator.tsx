@@ -239,7 +239,7 @@ export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }:
     }
 
     try {
-      const response = await fetch('http://91.135.156.173:8000/api/client/create_order_request', {
+      const response = await fetch('/api/proxy/api/client/create_order_request', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
