@@ -1,5 +1,4 @@
 "use client"
-
 import { useState, useEffect, useMemo } from "react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
@@ -24,6 +23,7 @@ import {
   mockDriverAssignedOrders,
   mockLockerCells, // Assuming mockLockerCells is available for free cell lookup
 } from "@/lib/mock-data"
+import { v4 as uuidv4 } from 'uuid';
 
 interface RoleEmulatorProps {
   addLog: (log: any) => void
@@ -46,6 +46,7 @@ export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }:
       cellSize: string
       status: string
       canCancel: boolean
+      correlationId?: string
     }>
   >([])
 
@@ -229,14 +230,52 @@ export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }:
     })
   }
 
+  const startOrderPolling = (correlationId: string, tempOrderId: number) => {
+    const intervalId = setInterval(async () => {
+      try {
+        const response = await fetch(`/api/proxy/api/orders?correlation_id=${correlationId}`)
+        if (!response.ok) {
+          throw new Error('Failed to fetch orders')
+        }
+        const orders = await response.json()
+        if (orders && orders.length > 0) {
+          const realOrder = orders[0]
+          // Обновить заказ в clientOrders
+          setClientOrders(prevOrders =>
+            prevOrders.map(order =>
+              order.correlationId === correlationId
+                ? {
+                    ...order,
+                    id: realOrder.id,
+                    status: realOrder.status || "active",
+                    canCancel: realOrder.can_cancel !== false, // Предполагаем, что если не указано, можно отменить
+                  }
+                : order
+            )
+          )
+          clearInterval(intervalId)
+        }
+      } catch (error) {
+        console.error('Error polling order:', error)
+      }
+    }, 5000) // Каждые 5 секунд
+
+    // Остановить через 5 минут
+    setTimeout(() => {
+      clearInterval(intervalId)
+    }, 5 * 60 * 1000)
+  }
+
   const handleCreateOrder = async () => {
-    const newOrderId = Math.floor(Math.random() * 10000) + 1000
+    const correlationId = uuidv4()
+    const tempOrderId = Math.floor(Math.random() * 10000) + 1000
     const data = {
       client_user_id: parseInt(selectedClientId),
       parcel_type: parcelType,
       cell_size: cellSize,
       sender_delivery: senderDelivery,
       recipient_delivery: recipientDelivery,
+      correlation_id: correlationId,
     }
 
     try {
@@ -254,38 +293,105 @@ export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }:
 
       const result = await response.json()
 
-      // Используем локальный ID, так как API может не возвращать order_id
-      setCreatedOrderId(newOrderId)
+      // Используем временный ID для UI, статус "processing"
+      setCreatedOrderId(tempOrderId)
 
-      // Добавить заказ в список клиента
+      // Добавить заказ в список клиента с correlationId
       setClientOrders([
         ...clientOrders,
         {
-          id: newOrderId,
+          id: tempOrderId,
           parcelType: parcelType,
           cellSize: cellSize,
-          status: "created",
-          canCancel: true,
+          status: "processing",
+          canCancel: false, // Пока не можем отменить, так как заказ ещё не создан
+          correlationId: correlationId,
         },
       ])
 
-      handleAction("client", "create_order", result)
+      // Запустить polling для отслеживания заказа
+      startOrderPolling(correlationId, tempOrderId)
+
+      handleAction("client", "create_order", { ...result, correlation_id: correlationId })
     } catch (error) {
       console.error('Error creating order:', error)
       // Здесь можно добавить уведомление об ошибке пользователю
     }
   }
 
-  const handleTakeOrder = (orderId: number) => {
-    const order = availableOrders.find((o) => o.id === orderId)
-    if (order) {
-      setAssignedOrders([...assignedOrders, { ...order, status: "taken_by_courier" }])
-      setAvailableOrders(availableOrders.filter((o) => o.id !== orderId))
-      handleAction("courier", "take_order", { order_id: orderId })
+  const handleTakeOrder = async (orderId: number) => {
+    const data = {
+      entity_type: "order",
+      entity_id: orderId,
+      process_name: "courier_take_order",
+      user_id: parseInt(selectedCourierId),
+    }
+
+    try {
+      const response = await fetch('/api/proxy/api/fsm/enqueue', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(data),
+      })
+
+      if (!response.ok) {
+        throw new Error('Network response was not ok')
+      }
+
+      const result = await response.json()
+
+      // Обновляем локальное состояние
+      const order = availableOrders.find((o) => o.id === orderId)
+      if (order) {
+        setAssignedOrders([...assignedOrders, { ...order, status: "taken_by_courier" }])
+        setAvailableOrders(availableOrders.filter((o) => o.id !== orderId))
+      }
+
+      handleAction("courier", "take_order", result)
+    } catch (error) {
+      console.error('Error taking order:', error)
+      // Возможно, показать ошибку пользователю
     }
   }
 
-  const handleCourierDeliveryAction = (orderId: number, action: string) => {
+  const handleCourierDeliveryAction = async (orderId: number, action: string) => {
+    let processName = ""
+    if (action === "confirm_placed") {
+      processName = "courier_place_in_cell"
+    }
+
+    if (processName) {
+      const data = {
+        entity_type: "order",
+        entity_id: orderId,
+        process_name: processName,
+        user_id: parseInt(selectedCourierId),
+      }
+
+      try {
+        const response = await fetch('/api/proxy/api/fsm/enqueue', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(data),
+        })
+
+        if (!response.ok) {
+          throw new Error('Network response was not ok')
+        }
+
+        const result = await response.json()
+        handleAction("courier", action, result)
+      } catch (error) {
+        console.error('Error performing delivery action:', error)
+        return // Не обновляем состояние, если ошибка
+      }
+    }
+
+    // Обновляем локальное состояние
     setAssignedOrders(
       assignedOrders.map((order) => {
         if (order.id !== orderId) return order
@@ -323,7 +429,10 @@ export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }:
         }
       }),
     )
-    handleAction("courier", action, { order_id: orderId })
+
+    if (!processName) {
+      handleAction("courier", action, { order_id: orderId })
+    }
   }
 
   // New driver order handling functions
@@ -468,20 +577,44 @@ export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }:
   }
 
   const handleCancelClientOrder = async (orderId: number) => {
+    const data = {
+      entity_type: "order",
+      entity_id: orderId,
+      process_name: "client_cancel_order",
+      user_id: parseInt(selectedClientId),
+    }
+
     try {
-      const response = await fetch('http://91.135.156.173:8000/api/client/cancel_order_request', {
+      const response = await fetch('/api/proxy/api/fsm/enqueue', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ order_id: orderId }),
+        body: JSON.stringify(data),
       })
 
-      if (!response.ok) {
-        throw new Error('Network response was not ok')
-      }
+      // if (!response.ok) {
+      //   if (response.status === 404) {
+      //     // Заказ нельзя отменить
+      //     setClientOrders(
+      //       clientOrders.map((order) => (order.id === orderId ? { ...order, status: "cannot_cancel", canCancel: false } : order)),
+      //     )
+      //     console.error('Order cannot be cancelled (404)')
+      //     return
+      //   }
+      //   throw new Error('Network response was not ok')
+      // }
 
       const result = await response.json()
+
+      // Проверяем, если бэкенд вернул ошибку в теле ответа
+      if (result.error || result.status === 'error' || result.message?.includes('cannot')) {
+        setClientOrders(
+          clientOrders.map((order) => (order.id === orderId ? { ...order, status: "cannot_cancel", canCancel: false } : order)),
+        )
+        console.error('Order cannot be cancelled:', result.message || 'Unknown error')
+        return
+      }
 
       // Обновляем локальный статус
       setClientOrders(
@@ -495,12 +628,40 @@ export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }:
     }
   }
 
-  const handleCancelCourierOrder = (orderId: number) => {
-    const order = assignedOrders.find((o) => o.id === orderId)
-    if (order) {
-      setAssignedOrders(assignedOrders.filter((o) => o.id !== orderId))
-      setAvailableOrders([...availableOrders, { ...order, courierId: null, status: "available_for_pickup" }])
-      handleAction("courier", "cancel_order", { order_id: orderId })
+  const handleCancelCourierOrder = async (orderId: number) => {
+    const data = {
+      entity_type: "order",
+      entity_id: orderId,
+      process_name: "courier_cancel_order",
+      user_id: parseInt(selectedCourierId),
+    }
+
+    try {
+      const response = await fetch('/api/proxy/api/fsm/enqueue', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(data),
+      })
+
+      if (!response.ok) {
+        throw new Error('Network response was not ok')
+      }
+
+      const result = await response.json()
+
+      // Обновляем локальное состояние
+      const order = assignedOrders.find((o) => o.id === orderId)
+      if (order) {
+        setAssignedOrders(assignedOrders.filter((o) => o.id !== orderId))
+        setAvailableOrders([...availableOrders, { ...order, courierId: null, status: "available_for_pickup" }])
+      }
+
+      handleAction("courier", "cancel_order", result)
+    } catch (error) {
+      console.error('Error cancelling order:', error)
+      // Возможно, показать ошибку пользователю
     }
   }
 
@@ -1032,8 +1193,8 @@ export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }:
                               <TableCell className="hidden md:table-cell">{order.parcelType === "parcel" ? t.client.parcel : t.client.letter}</TableCell>
                               <TableCell className="hidden md:table-cell">{order.cellSize}</TableCell>
                               <TableCell>
-                                <Badge variant={order.status === "cancelled" ? "destructive" : "secondary"}>
-                                  {order.status}
+                                <Badge variant={order.status === "cancelled" ? "destructive" : order.status === "processing" ? "secondary" : "default"}>
+                                  {order.status === "processing" ? t.client.statusProcessing : order.status}
                                 </Badge>
                               </TableCell>
                               <TableCell>
