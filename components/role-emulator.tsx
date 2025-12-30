@@ -436,24 +436,80 @@ export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }:
   }
 
   // New driver order handling functions
-  const handleTakeDriverOrder = (orderId: number) => {
-    const order = driverAvailableOrders.find((o) => o.id === orderId)
-    if (order) {
-      setDriverAvailableOrders(driverAvailableOrders.filter((o) => o.id !== orderId))
-      setDriverAssignedOrders([
-        ...driverAssignedOrders,
-        { ...order, driverId: 200, status: "taken_from_exchange_driver" },
-      ])
-      handleAction("driver", "take_order", { order_id: orderId, driver_id: 200 })
+  const handleTakeDriverOrder = async (orderId: number) => {
+    const data = {
+      entity_type: "trip",
+      entity_id: orderId,
+      process_name: "trip_assign_driver",
+      user_id: parseInt(selectedDriverId),
+    }
+
+    try {
+      const response = await fetch('/api/proxy/api/fsm/enqueue', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(data),
+      })
+
+      if (!response.ok) {
+        throw new Error('Network response was not ok')
+      }
+
+      const result = await response.json()
+
+      // Обновляем локальное состояние
+      const order = driverAvailableOrders.find((o) => o.id === orderId)
+      if (order) {
+        setDriverAvailableOrders(driverAvailableOrders.filter((o) => o.id !== orderId))
+        setDriverAssignedOrders([
+          ...driverAssignedOrders,
+          { ...order, driverId: parseInt(selectedDriverId), status: "taken_from_exchange_driver" },
+        ])
+      }
+
+      handleAction("driver", "take_order", result)
+    } catch (error) {
+      console.error('Error taking driver order:', error)
+      // Возможно, показать ошибку пользователю
     }
   }
 
-  const handleCancelDriverOrder = (orderId: number) => {
-    const order = driverAssignedOrders.find((o) => o.id === orderId)
-    if (order) {
-      setDriverAssignedOrders(driverAssignedOrders.filter((o) => o.id !== orderId))
-      setDriverAvailableOrders([...driverAvailableOrders, { ...order, driverId: null, status: "available_for_driver" }])
-      handleAction("driver", "cancel_order", { order_id: orderId })
+  const handleCancelDriverOrder = async (orderId: number) => {
+    const data = {
+      entity_type: "order",
+      entity_id: orderId,
+      process_name: "cancel_order",
+      user_id: parseInt(selectedDriverId),
+    }
+
+    try {
+      const response = await fetch('/api/proxy/api/fsm/enqueue', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(data),
+      })
+
+      if (!response.ok) {
+        throw new Error('Network response was not ok')
+      }
+
+      const result = await response.json()
+
+      // Обновляем локальное состояние
+      const order = driverAssignedOrders.find((o) => o.id === orderId)
+      if (order) {
+        setDriverAssignedOrders(driverAssignedOrders.filter((o) => o.id !== orderId))
+        setDriverAvailableOrders([...driverAvailableOrders, { ...order, driverId: null, status: "available_for_driver" }])
+      }
+
+      handleAction("driver", "cancel_order", result)
+    } catch (error) {
+      console.error('Error cancelling driver order:', error)
+      // Возможно, показать ошибку пользователю
     }
   }
 
@@ -479,39 +535,66 @@ export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }:
   }
 
   // Updated handleStartTrip signature to accept tripId
-  const handleStartTrip = (tripId: number) => {
-    // Find an order associated with the tripId. Assuming each order in driverAssignedOrders has a tripId.
-    // If not, this logic might need adjustment based on how driverAssignedOrders is structured for trips.
-    const order = driverAssignedOrders.find((o) => o.tripId === tripId)
-    if (!order) return
+  const handleStartTrip = async (tripId: number) => {
+    const data = {
+      entity_type: "trip",
+      entity_id: tripId,
+      process_name: "start_trip",
+      user_id: parseInt(selectedDriverId),
+    }
 
-    setActiveTripId(tripId)
-    setTripId(tripId)
-    setTripState("at_from_locker")
-    setHasActiveTrip(true)
+    try {
+      const response = await fetch('/api/proxy/api/fsm/enqueue', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(data),
+      })
 
-    const fromLockerId = order.lockerId
-    const toLockerId = mockLockers.find((l) => l.id !== fromLockerId)?.id || fromLockerId
+      if (!response.ok) {
+        throw new Error('Network response was not ok')
+      }
 
-    setLockerFrom(fromLockerId.toString())
-    setLockerTo(toLockerId.toString())
+      const result = await response.json()
 
-    const direct = mockOrders.filter((o) => o.lockerId === fromLockerId).slice(0, 5)
-    const reverse = mockOrders.filter((o) => o.lockerId === toLockerId).slice(0, 3)
+      // Обновляем локальное состояние
+      // Find an order associated with the tripId. Assuming each order in driverAssignedOrders has a tripId.
+      // If not, this logic might need adjustment based on how driverAssignedOrders is structured for trips.
+      const order = driverAssignedOrders.find((o) => o.tripId === tripId)
+      if (!order) return
 
-    setDirectOrders(direct)
-    setReverseOrders(reverse)
-    setSelectedDirectOrders([])
-    setSelectedReverseOrders([])
-    setTakenDirectOrders([])
-    setTakenReverseOrders([])
-    setFreeCells([]) // Clear free cells when starting a new trip
+      setActiveTripId(tripId)
+      setTripId(tripId)
+      setTripState("at_from_locker")
+      setHasActiveTrip(true)
 
-    setDriverAssignedOrders(
-      driverAssignedOrders.map((o) => (o.tripId === tripId ? { ...o, tripStatus: "at_from_locker" } : o)),
-    )
+      const fromLockerId = order.lockerId
+      const toLockerId = mockLockers.find((l) => l.id !== fromLockerId)?.id || fromLockerId
 
-    handleAction("driver", "start_trip", { trip_id: tripId, order_id: order.id, from: fromLockerId, to: toLockerId })
+      setLockerFrom(fromLockerId.toString())
+      setLockerTo(toLockerId.toString())
+
+      const direct = mockOrders.filter((o) => o.lockerId === fromLockerId).slice(0, 5)
+      const reverse = mockOrders.filter((o) => o.lockerId === toLockerId).slice(0, 3)
+
+      setDirectOrders(direct)
+      setReverseOrders(reverse)
+      setSelectedDirectOrders([])
+      setSelectedReverseOrders([])
+      setTakenDirectOrders([])
+      setTakenReverseOrders([])
+      setFreeCells([]) // Clear free cells when starting a new trip
+
+      setDriverAssignedOrders(
+        driverAssignedOrders.map((o) => (o.tripId === tripId ? { ...o, tripStatus: "at_from_locker" } : o)),
+      )
+
+      handleAction("driver", "start_trip", result)
+    } catch (error) {
+      console.error('Error starting trip:', error)
+      // Возможно, показать ошибку пользователю
+    }
   }
 
   const handleTakeSelectedOrders = () => {
@@ -529,9 +612,38 @@ export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }:
     handleAction("driver", "take_orders", { order_ids: allSelected })
   }
 
-  const handleChangeTripState = (newState: "at_from_locker" | "in_transit" | "at_to_locker") => {
+  const handleChangeTripState = async (newState: "at_from_locker" | "in_transit" | "at_to_locker") => {
     if (tripState === "in_transit" && newState === "at_from_locker") return
     if (tripState === "at_to_locker" && (newState === "at_from_locker" || newState === "in_transit")) return
+
+    if (newState === "at_to_locker") {
+      const data = {
+        entity_type: "trip",
+        entity_id: tripId || activeTripId,
+        process_name: "arrive_at_destination",
+        user_id: parseInt(selectedDriverId),
+      }
+
+      try {
+        const response = await fetch('/api/proxy/api/fsm/enqueue', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(data),
+        })
+
+        if (!response.ok) {
+          throw new Error('Network response was not ok')
+        }
+
+        const result = await response.json()
+        handleAction("driver", "arrive_at_destination", result)
+      } catch (error) {
+        console.error('Error arriving at destination:', error)
+        return // Не обновляем состояние, если ошибка
+      }
+    }
 
     setTripState(newState)
 
@@ -547,33 +659,62 @@ export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }:
       }
     }
 
-    handleAction("driver", "change_trip_state", { trip_id: tripId, state: newState })
+    if (newState !== "at_to_locker") {
+      handleAction("driver", "change_trip_state", { trip_id: tripId, state: newState })
+    }
   }
 
-  const handlePlaceParcelInCell = (orderId: number, cellNumber: string) => {
-    const order = [...directOrders, ...reverseOrders].find((o) => o.id === orderId)
-    if (!order) return
-
-    const cell = freeCells.find((c) => c.number === cellNumber)
-    if (!cell) return
-
-    const sizeOrder = { P: 1, S: 2, M: 3, L: 4 }
-    const orderSize = sizeOrder[order.size as keyof typeof sizeOrder] || 0
-    const cellSizeValue = sizeOrder[cell.size as keyof typeof sizeOrder] || 0
-
-    if (orderSize > cellSizeValue) {
-      console.log("[v0] Cannot place larger parcel in smaller cell")
-      return
+  const handlePlaceParcelInCell = async (orderId: number, cellNumber: string) => {
+    const data = {
+      entity_type: "order",
+      entity_id: orderId,
+      process_name: "open_cell",
+      user_id: parseInt(selectedDriverId),
     }
 
-    // Remove order from taken orders
-    setTakenDirectOrders(takenDirectOrders.filter((id) => id !== orderId))
-    setTakenReverseOrders(takenReverseOrders.filter((id) => id !== orderId))
+    try {
+      const response = await fetch('/api/proxy/api/fsm/enqueue', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(data),
+      })
 
-    setPlacedParcels({ ...placedParcels, [cellNumber]: { orderId, originalSize: order.size } })
-    setFreeCells(freeCells.filter((c) => c.number !== cellNumber))
+      if (!response.ok) {
+        throw new Error('Network response was not ok')
+      }
 
-    handleAction("driver", "place_parcel_in_cell", { order_id: orderId, cell: cellNumber })
+      const result = await response.json()
+
+      // Обновляем локальное состояние
+      const order = [...directOrders, ...reverseOrders].find((o) => o.id === orderId)
+      if (!order) return
+
+      const cell = freeCells.find((c) => c.number === cellNumber)
+      if (!cell) return
+
+      const sizeOrder = { P: 1, S: 2, M: 3, L: 4 }
+      const orderSize = sizeOrder[order.size as keyof typeof sizeOrder] || 0
+      const cellSizeValue = sizeOrder[cell.size as keyof typeof sizeOrder] || 0
+
+      if (orderSize > cellSizeValue) {
+        console.log("[v0] Cannot place larger parcel in smaller cell")
+        return
+      }
+
+      // Remove order from taken orders
+      setTakenDirectOrders(takenDirectOrders.filter((id) => id !== orderId))
+      setTakenReverseOrders(takenReverseOrders.filter((id) => id !== orderId))
+
+      setPlacedParcels({ ...placedParcels, [cellNumber]: { orderId, originalSize: order.size } })
+      setFreeCells(freeCells.filter((c) => c.number !== cellNumber))
+
+      handleAction("driver", "place_parcel_in_cell", result)
+    } catch (error) {
+      console.error('Error placing parcel in cell:', error)
+      // Возможно, показать ошибку пользователю
+    }
   }
 
   const handleCancelClientOrder = async (orderId: number) => {
