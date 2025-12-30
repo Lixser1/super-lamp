@@ -47,6 +47,7 @@ export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }:
       status: string
       canCancel: boolean
       correlationId?: string
+      isLoading?: boolean
     }>
   >([])
 
@@ -231,40 +232,48 @@ export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }:
   }
 
   const startOrderPolling = (correlationId: string, tempOrderId: number) => {
-    const intervalId = setInterval(async () => {
-      try {
-        const response = await fetch(`/api/proxy/api/orders?correlation_id=${correlationId}`)
-        if (!response.ok) {
-          throw new Error('Failed to fetch orders')
-        }
-        const orders = await response.json()
-        if (orders && orders.length > 0) {
-          const realOrder = orders[0]
-          // Обновить заказ в clientOrders
-          setClientOrders(prevOrders =>
-            prevOrders.map(order =>
-              order.correlationId === correlationId
-                ? {
-                    ...order,
-                    id: realOrder.id,
-                    status: realOrder.status || "active",
-                    canCancel: realOrder.can_cancel !== false, // Предполагаем, что если не указано, можно отменить
-                  }
-                : order
-            )
-          )
-          clearInterval(intervalId)
-        }
-      } catch (error) {
-        console.error('Error polling order:', error)
+  const intervalId = setInterval(async () => {
+    try {
+      const response = await fetch(`/api/proxy/api/orders?correlation_id=${correlationId}`)
+      if (!response.ok) {
+        throw new Error('Failed to fetch orders')
       }
-    }, 5000) // Каждые 5 секунд
+      const orders = await response.json()
+      if (orders && orders.length > 0) {
+        const realOrder = orders[0]
+        setClientOrders(prevOrders =>
+          prevOrders.map(order =>
+            order.correlationId === correlationId
+              ? {
+                  ...order,
+                  id: realOrder.id,
+                  status: realOrder.status || "active",
+                  canCancel: realOrder.can_cancel !== false,
+                  isLoading: false,  // ДОБАВЛЕНО - завершаем загрузку
+                }
+              : order
+          )
+        )
+        setCreatedOrderId(realOrder.id)  // ДОБАВЛЕНО - устанавливаем реальный ID
+        clearInterval(intervalId)
+      }
+    } catch (error) {
+      console.error('Error polling order:', error)
+    }
+  }, 5000)
 
-    // Остановить через 5 минут
-    setTimeout(() => {
-      clearInterval(intervalId)
-    }, 5 * 60 * 1000)
-  }
+  setTimeout(() => {
+    clearInterval(intervalId)
+    // ДОБАВЛЕНО - обработка таймаута
+    setClientOrders(prevOrders =>
+      prevOrders.map(order =>
+        order.correlationId === correlationId && order.isLoading
+          ? { ...order, isLoading: false, status: "error" }
+          : order
+      )
+    )
+  }, 5 * 60 * 1000)
+}
 
   const handleCreateOrder = async () => {
     const correlationId = uuidv4()
@@ -293,8 +302,6 @@ export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }:
 
       const result = await response.json()
 
-      // Используем временный ID для UI, статус "processing"
-      setCreatedOrderId(tempOrderId)
 
       // Добавить заказ в список клиента с correlationId
       setClientOrders([
@@ -306,6 +313,7 @@ export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }:
           status: "processing",
           canCancel: false, // Пока не можем отменить, так как заказ ещё не создан
           correlationId: correlationId,
+          isLoading: true,
         },
       ])
 
@@ -1239,7 +1247,7 @@ export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }:
                   </div>
                 )}
 
-                {createdOrderId && (
+                {createdOrderId && !clientOrders.some(o => o.isLoading) && (
                   <div>
                     <Badge variant="default" className="bg-green-600">
                       {t.client.orderId}: {createdOrderId}
@@ -1329,27 +1337,56 @@ export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }:
                         </TableHeader>
                         <TableBody>
                           {clientOrders.map((order) => (
-                            <TableRow key={order.id}>
-                              <TableCell>{order.id}</TableCell>
-                              <TableCell className="hidden md:table-cell">{order.parcelType === "parcel" ? t.client.parcel : t.client.letter}</TableCell>
-                              <TableCell className="hidden md:table-cell">{order.cellSize}</TableCell>
+                            <TableRow key={order.correlationId || order.id}>  {/* ИЗМЕНЕНО - используем correlationId как ключ */}
                               <TableCell>
-                                <Badge variant={order.status === "cancelled" ? "destructive" : order.status === "processing" ? "secondary" : "default"}>
-                                  {order.status === "processing" ? t.client.statusProcessing : order.status}
-                                </Badge>
+                                {order.isLoading ? (  // ДОБАВЛЕНО - индикатор загрузки
+                                  <div className="flex items-center gap-2">
+                                    <div className="h-4 w-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                                    <span className="text-sm text-muted-foreground">
+                                      {language === "ru" ? "Создание..." : "Creating..."}
+                                    </span>
+                                  </div>
+                                ) : (
+                                  order.id
+                                )}
+                              </TableCell>
+                              <TableCell className="hidden md:table-cell">
+                                {order.isLoading ? (  // ДОБАВЛЕНО - заглушка для типа посылки
+                                  <div className="h-4 w-16 bg-muted animate-pulse rounded" />
+                                ) : (
+                                  order.parcelType === "parcel" ? t.client.parcel : t.client.letter
+                                )}
+                              </TableCell>
+                              <TableCell className="hidden md:table-cell">
+                                {order.isLoading ? (  // ДОБАВЛЕНО - заглушка для размера
+                                  <div className="h-4 w-8 bg-muted animate-pulse rounded" />
+                                ) : (
+                                  order.cellSize
+                                )}
                               </TableCell>
                               <TableCell>
-                                {order.canCancel ? (
-                                  <Button
-                                    size="sm"
-                                    variant="destructive"
-                                    onClick={() => handleCancelClientOrder(order.id)}
-                                    className={highlightedAction === "cancel_order" ? "animate-pulse" : ""}
-                                  >
-                                    {t.client.cancelOrder}
-                                  </Button>
+                                {order.isLoading ? (  // ДОБАВЛЕНО - заглушка для статуса
+                                  <div className="h-5 w-24 bg-muted animate-pulse rounded-full" />
                                 ) : (
-                                  <span className="text-xs text-muted-foreground">{t.client.cannotCancel}</span>
+                                  <Badge variant={order.status === "cancelled" ? "destructive" : order.status === "processing" ? "secondary" : "default"}>
+                                    {order.status === "processing" ? t.client.statusProcessing : order.status}
+                                  </Badge>
+                                )}
+                              </TableCell>
+                              <TableCell>
+                                {!order.isLoading && (  // ДОБАВЛЕНО - скрываем кнопки во время загрузки
+                                  order.canCancel ? (
+                                    <Button
+                                      size="sm"
+                                      variant="destructive"
+                                      onClick={() => handleCancelClientOrder(order.id)}
+                                      className={highlightedAction === "cancel_order" ? "animate-pulse" : ""}
+                                    >
+                                      {t.client.cancelOrder}
+                                    </Button>
+                                  ) : (
+                                    <span className="text-xs text-muted-foreground">{t.client.cannotCancel}</span>
+                                  )
                                 )}
                               </TableCell>
                             </TableRow>
