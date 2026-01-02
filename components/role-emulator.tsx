@@ -118,7 +118,14 @@ export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }:
   } | null>(null)
 
   const [courierOrdersFilter, setCourierOrdersFilter] = useState<"all" | "active" | "archive">("active")
+const [isRefreshingCourier, setIsRefreshingCourier] = useState(false)
+const [isRefreshingDriver, setIsRefreshingDriver] = useState(false)
+const [isRefreshingClient, setIsRefreshingClient] = useState(false)
+const [isTabActive, setIsTabActive] = useState(true)
+const [pollingInterval, setPollingInterval] = useState(20000) // 20 секунд по умолчанию
+const [lastFetchTime, setLastFetchTime] = useState<{ [key: string]: number }>({})
 
+  
   type CourierDeliveryStatus =
     | "assigned"
     | "taken_by_courier"
@@ -135,6 +142,88 @@ export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }:
     | "waiting_for_code_retry" // New status
     | "code_received_retry" // New status
     | "request_code_again" // New status
+
+// ========== УМНЫЙ POLLING ДЛЯ КУРЬЕРА ==========
+useEffect(() => {
+  if (mode !== "create" || !isTabActive) return
+  
+  // Начальная загрузка
+  refreshCourierOrders()
+  
+  // Функция polling с кешированием
+  const doPoll = async () => {
+    const now = Date.now()
+    const lastFetch = lastFetchTime['courier'] || 0
+    
+    // Проверяем: прошло ли достаточно времени с последнего запроса
+    if (now - lastFetch < pollingInterval - 1000) {
+      return // Слишком рано, пропускаем
+    }
+    
+    setLastFetchTime(prev => ({ ...prev, courier: now }))
+    
+    const startTime = Date.now()
+    await refreshCourierOrders()
+    const duration = Date.now() - startTime
+    
+    // Адаптивный интервал: если запрос долгий, увеличиваем интервал
+    if (duration > 3000) {
+      console.warn('Slow courier request, increasing interval')
+      setPollingInterval(prev => Math.min(prev * 1.5, 60000)) // Максимум 60 сек
+    } else if (duration < 500 && pollingInterval > 20000) {
+      // Если быстро, можно вернуть к норме
+      setPollingInterval(20000)
+    }
+  }
+  
+  const intervalId = setInterval(doPoll, pollingInterval)
+  
+  return () => clearInterval(intervalId)
+}, [mode, selectedCourierId, isTabActive, pollingInterval])
+
+// ========== УМНЫЙ POLLING ДЛЯ ВОДИТЕЛЯ ==========
+useEffect(() => {
+  if (mode !== "create" || !isTabActive) return
+  
+  refreshDriverOrders()
+  
+  const doPoll = async () => {
+    const now = Date.now()
+    const lastFetch = lastFetchTime['driver'] || 0
+    
+    if (now - lastFetch < pollingInterval - 1000) {
+      return
+    }
+    
+    setLastFetchTime(prev => ({ ...prev, driver: now }))
+    
+    const startTime = Date.now()
+    await refreshDriverOrders()
+    const duration = Date.now() - startTime
+    
+    if (duration > 3000) {
+      console.warn('Slow driver request, increasing interval')
+      setPollingInterval(prev => Math.min(prev * 1.5, 60000))
+    } else if (duration < 500 && pollingInterval > 20000) {
+      setPollingInterval(20000)
+    }
+  }
+  
+  const intervalId = setInterval(doPoll, pollingInterval)
+  
+  return () => clearInterval(intervalId)
+}, [mode, selectedDriverId, isTabActive, pollingInterval])
+
+// Для клиента НЕ делаем автозагрузку, т.к. заказы добавляются через форму
+
+useEffect(() => {
+  const handleVisibilityChange = () => {
+    setIsTabActive(!document.hidden)
+  }
+  
+  document.addEventListener('visibilitychange', handleVisibilityChange)
+  return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
+}, [])
 
   useEffect(() => {
     const activeTrip =
@@ -232,7 +321,12 @@ export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }:
   }
 
   const startOrderPolling = (correlationId: string, tempOrderId: number) => {
+  let attempts = 0
+  const maxAttempts = 8 // 8 попыток * 15 секунд = 2 минуты
+  
   const intervalId = setInterval(async () => {
+    attempts++
+    
     try {
       const response = await fetch(`/api/proxy/api/orders?correlation_id=${correlationId}`)
       if (!response.ok) {
@@ -249,30 +343,229 @@ export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }:
                   id: realOrder.id,
                   status: realOrder.status || "active",
                   canCancel: realOrder.can_cancel !== false,
-                  isLoading: false,  // ДОБАВЛЕНО - завершаем загрузку
+                  isLoading: false,
                 }
               : order
           )
         )
-        setCreatedOrderId(realOrder.id)  // ДОБАВЛЕНО - устанавливаем реальный ID
+        setCreatedOrderId(realOrder.id)
         clearInterval(intervalId)
       }
     } catch (error) {
       console.error('Error polling order:', error)
     }
-  }, 5000)
-
-  setTimeout(() => {
-    clearInterval(intervalId)
-    // ДОБАВЛЕНО - обработка таймаута
-    setClientOrders(prevOrders =>
-      prevOrders.map(order =>
-        order.correlationId === correlationId && order.isLoading
-          ? { ...order, isLoading: false, status: "error" }
-          : order
+    
+    // Остановить после 8 попыток (2 минуты)
+    if (attempts >= maxAttempts) {
+      clearInterval(intervalId)
+      setClientOrders(prevOrders =>
+        prevOrders.map(order =>
+          order.correlationId === correlationId && order.isLoading
+            ? { ...order, isLoading: false, status: "error" }
+            : order
+        )
       )
+    }
+  }, 15000) // Каждые 15 секунд вместо 5
+}
+
+// ========== ФУНКЦИИ ЗАГРУЗКИ ДАННЫХ ==========
+
+const fetchAllOrders = async () => {
+  try {
+    const response = await fetch('/api/proxy/api/orders')
+    if (!response.ok) throw new Error('Failed to fetch orders')
+    return await response.json()
+  } catch (error) {
+    console.error('Error fetching orders:', error)
+    return []
+  }
+}
+
+const fetchOrderById = async (orderId: number) => {
+  try {
+    const response = await fetch(`/api/proxy/api/orders/${orderId}`)
+    if (!response.ok) throw new Error('Failed to fetch order')
+    return await response.json()
+  } catch (error) {
+    console.error('Error fetching order:', error)
+    return null
+  }
+}
+
+const fetchCellById = async (cellId: number) => {
+  try {
+    const response = await fetch(`/api/proxy/api/cells/${cellId}`)
+    if (!response.ok) throw new Error('Failed to fetch cell')
+    return await response.json()
+  } catch (error) {
+    console.error('Error fetching cell:', error)
+    return null
+  }
+}
+
+// Обновить заказы клиента
+const refreshClientOrders = async () => {
+  if (isRefreshingClient) return // Предотвращаем двойной запрос
+  setIsRefreshingClient(true)
+  
+  try {
+    const allOrders = await fetchAllOrders()
+    const existingIds = clientOrders.map(o => o.id)
+    const existingOrders = allOrders.filter((o: any) => existingIds.includes(o.id))
+    
+    const clientOrdersList = await Promise.all(existingOrders.map(async (o: any) => {
+      const cell = await fetchCellById(o.source_cell_id)
+      return {
+        id: o.id,
+        parcelType: o.parcel_type || 'parcel',
+        cellSize: cell?.size || 'S',
+        status: o.status,
+        canCancel: ['order_created', 'order_reserved'].includes(o.status),
+        isLoading: false,
+      }
+    }))
+    
+    setClientOrders(prev => {
+      const updated = [...prev]
+      clientOrdersList.forEach(newOrder => {
+        const index = updated.findIndex(o => o.id === newOrder.id)
+        if (index >= 0) {
+          updated[index] = { ...updated[index], ...newOrder }
+        }
+      })
+      return updated
+    })
+  } catch (error) {
+    console.error('Error refreshing client orders:', error)
+  } finally {
+    setIsRefreshingClient(false)
+  }
+}
+
+// Обновить заказы для курьера
+// Обновить заказы для курьера
+const refreshCourierOrders = async () => {
+  if (isRefreshingCourier) return // Защита от параллельных запросов
+  setIsRefreshingCourier(true)
+  
+  try {
+    const allOrders = await fetchAllOrders()
+    
+    // Фильтруем на клиенте, а не на сервере (снижаем нагрузку на БД)
+    const available = allOrders.filter(
+      (o: any) => o.pickup_type === 'courier' && o.status === 'order_created'
     )
-  }, 5 * 60 * 1000)
+    
+    const assigned = allOrders.filter(
+      (o: any) => 
+        o.pickup_type === 'courier' && 
+        !['order_created', 'order_completed', 'order_cancelled'].includes(o.status)
+    )
+    
+    // Обогащаем только если данные изменились
+    const enrichIfNeeded = async (orders: any[]) => {
+      if (orders.length === 0) return []
+      
+      // Кешируем информацию о ячейках
+      const cellCache = new Map()
+      
+      return Promise.all(orders.map(async (o: any) => {
+        // Проверяем кеш перед запросом
+        let sourceCell = cellCache.get(o.source_cell_id)
+        if (!sourceCell) {
+          sourceCell = await fetchCellById(o.source_cell_id)
+          if (sourceCell) cellCache.set(o.source_cell_id, sourceCell)
+        }
+        
+        return {
+          ...o,
+          id: o.id,
+          status: o.status,
+          lockerId: sourceCell?.locker_id || 1,
+          cell: sourceCell?.number || 'N/A',
+          size: sourceCell?.size || 'S',
+        }
+      }))
+    }
+    
+    // Обогащаем только если есть изменения
+    if (JSON.stringify(available) !== JSON.stringify(availableOrders)) {
+      setAvailableOrders(await enrichIfNeeded(available))
+    }
+    
+    if (JSON.stringify(assigned) !== JSON.stringify(assignedOrders)) {
+      setAssignedOrders(await enrichIfNeeded(assigned))
+    }
+    
+  } catch (error) {
+    console.error('Error refreshing courier orders:', error)
+    // При ошибке увеличиваем интервал
+    setPollingInterval(prev => Math.min(prev * 2, 60000))
+  } finally {
+    setIsRefreshingCourier(false)
+  }
+}
+
+// Обновить заказы для водителя
+// Обновить заказы для водителя
+const refreshDriverOrders = async () => {
+  if (isRefreshingDriver) return
+  setIsRefreshingDriver(true)
+  
+  try {
+    const allOrders = await fetchAllOrders()
+    
+    const available = allOrders.filter(
+      (o: any) => 
+        o.pickup_type === 'courier' && 
+        ['order_ready_for_trip', 'order_created'].includes(o.status)
+    )
+    
+    const assigned = allOrders.filter(
+      (o: any) => 
+        ['order_in_trip', 'order_at_destination'].includes(o.status)
+    )
+    
+    const enrichIfNeeded = async (orders: any[]) => {
+      if (orders.length === 0) return []
+      
+      const cellCache = new Map()
+      
+      return Promise.all(orders.map(async (o: any) => {
+        let sourceCell = cellCache.get(o.source_cell_id)
+        if (!sourceCell) {
+          sourceCell = await fetchCellById(o.source_cell_id)
+          if (sourceCell) cellCache.set(o.source_cell_id, sourceCell)
+        }
+        
+        return {
+          ...o,
+          id: o.id,
+          tripId: o.trip_id || o.id,
+          status: o.status,
+          tripStatus: o.trip_status || 'at_from_locker',
+          lockerId: sourceCell?.locker_id || 1,
+          cell: sourceCell?.number || 'N/A',
+          size: sourceCell?.size || 'S',
+        }
+      }))
+    }
+    
+    if (JSON.stringify(available) !== JSON.stringify(driverAvailableOrders)) {
+      setDriverAvailableOrders(await enrichIfNeeded(available))
+    }
+    
+    if (JSON.stringify(assigned) !== JSON.stringify(driverAssignedOrders)) {
+      setDriverAssignedOrders(await enrichIfNeeded(assigned))
+    }
+    
+  } catch (error) {
+    console.error('Error refreshing driver orders:', error)
+    setPollingInterval(prev => Math.min(prev * 2, 60000))
+  } finally {
+    setIsRefreshingDriver(false)
+  }
 }
 
   const handleCreateOrder = async () => {
@@ -317,10 +610,7 @@ export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }:
         },
       ])
 
-      // Запустить polling для отслеживания заказа
-      startOrderPolling(correlationId, tempOrderId)
-
-      handleAction("client", "create_order", { ...result, correlation_id: correlationId })
+	  startOrderPolling(correlationId, tempOrderId)
     } catch (error) {
       console.error('Error creating order:', error)
       // Здесь можно добавить уведомление об ошибке пользователю
@@ -328,41 +618,35 @@ export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }:
   }
 
   const handleTakeOrder = async (orderId: number) => {
-    const data = {
-      entity_type: "order",
-      entity_id: orderId,
-      process_name: "courier_take_order",
-      user_id: parseInt(selectedCourierId),
-    }
-
-    try {
-      const response = await fetch('/api/proxy/api/fsm/enqueue', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(data),
-      })
-
-      if (!response.ok) {
-        throw new Error('Network response was not ok')
-      }
-
-      const result = await response.json()
-
-      // Обновляем локальное состояние
-      const order = availableOrders.find((o) => o.id === orderId)
-      if (order) {
-        setAssignedOrders([...assignedOrders, { ...order, status: "taken_by_courier" }])
-        setAvailableOrders(availableOrders.filter((o) => o.id !== orderId))
-      }
-
-      handleAction("courier", "take_order", result)
-    } catch (error) {
-      console.error('Error taking order:', error)
-      // Возможно, показать ошибку пользователю
-    }
+  const data = {
+    entity_type: "order",
+    entity_id: orderId,
+    process_name: "courier_take_order",
+    user_id: parseInt(selectedCourierId),
   }
+
+  try {
+    const response = await fetch('/api/proxy/api/fsm/enqueue', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(data),
+    })
+
+    if (!response.ok) {
+      throw new Error('Network response was not ok')
+    }
+
+    const result = await response.json()
+    handleAction("courier", "take_order", result)
+    
+    // ДОБАВЛЕНО: Обновить списки после действия
+    await refreshCourierOrders()
+  } catch (error) {
+    console.error('Error taking order:', error)
+  }
+}
 
   const handleCourierDeliveryAction = async (orderId: number, action: string) => {
     let processName = ""
@@ -443,46 +727,37 @@ export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }:
     }
   }
 
-  // New driver order handling functions
   const handleTakeDriverOrder = async (orderId: number) => {
-    const data = {
-      entity_type: "trip",
-      entity_id: orderId,
-      process_name: "trip_assign_driver",
-      user_id: parseInt(selectedDriverId),
-    }
-
-    try {
-      const response = await fetch('/api/proxy/api/fsm/enqueue', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(data),
-      })
-
-      if (!response.ok) {
-        throw new Error('Network response was not ok')
-      }
-
-      const result = await response.json()
-
-      // Обновляем локальное состояние
-      const order = driverAvailableOrders.find((o) => o.id === orderId)
-      if (order) {
-        setDriverAvailableOrders(driverAvailableOrders.filter((o) => o.id !== orderId))
-        setDriverAssignedOrders([
-          ...driverAssignedOrders,
-          { ...order, driverId: parseInt(selectedDriverId), status: "taken_from_exchange_driver" },
-        ])
-      }
-
-      handleAction("driver", "take_order", result)
-    } catch (error) {
-      console.error('Error taking driver order:', error)
-      // Возможно, показать ошибку пользователю
-    }
+  // ИСПРАВЛЕНО: entity_type должен быть "order", а не "trip"
+  const data = {
+    entity_type: "order",
+    entity_id: orderId,
+    process_name: "trip_assign_driver",
+    user_id: parseInt(selectedDriverId),
   }
+
+  try {
+    const response = await fetch('/api/proxy/api/fsm/enqueue', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(data),
+    })
+
+    if (!response.ok) {
+      throw new Error('Network response was not ok')
+    }
+
+    const result = await response.json()
+    handleAction("driver", "take_order", result)
+    
+    // ДОБАВЛЕНО: Обновить списки
+    await refreshDriverOrders()
+  } catch (error) {
+    console.error('Error taking driver order:', error)
+  }
+}
 
   const handleCancelDriverOrder = async (orderId: number) => {
     const data = {
@@ -545,11 +820,11 @@ export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }:
   // Updated handleStartTrip signature to accept tripId
   const handleStartTrip = async (tripId: number) => {
     const data = {
-      entity_type: "trip",
-      entity_id: tripId,
-      process_name: "start_trip",
-      user_id: parseInt(selectedDriverId),
-    }
+    entity_type: "order",
+    entity_id: tripId, // это на самом деле order_id
+    process_name: "start_trip",
+    user_id: parseInt(selectedDriverId),
+  }
 
     try {
       const response = await fetch('/api/proxy/api/fsm/enqueue', {
@@ -565,11 +840,9 @@ export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }:
       }
 
       const result = await response.json()
-
-      // Обновляем локальное состояние
-      // Find an order associated with the tripId. Assuming each order in driverAssignedOrders has a tripId.
-      // If not, this logic might need adjustment based on how driverAssignedOrders is structured for trips.
-      const order = driverAssignedOrders.find((o) => o.tripId === tripId)
+      handleAction("driver", "start_trip", result)
+    await refreshDriverOrders()
+	const order = driverAssignedOrders.find((o) => o.tripId === tripId)
       if (!order) return
 
       setActiveTripId(tripId)
@@ -626,11 +899,11 @@ export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }:
 
     if (newState === "at_to_locker") {
       const data = {
-        entity_type: "trip",
-        entity_id: tripId || activeTripId,
-        process_name: "arrive_at_destination",
-        user_id: parseInt(selectedDriverId),
-      }
+    entity_type: "order", // ИСПРАВЛЕНО
+    entity_id: tripId || activeTripId,
+    process_name: "arrive_at_destination",
+    user_id: parseInt(selectedDriverId),
+  }
 
       try {
         const response = await fetch('/api/proxy/api/fsm/enqueue', {
@@ -771,6 +1044,8 @@ export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }:
       )
 
       handleAction("client", "cancel_order", result)
+
+	  await refreshClientOrders()
     } catch (error) {
       console.error('Error cancelling order:', error)
       // Возможно, показать ошибку пользователю
@@ -808,6 +1083,8 @@ export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }:
       }
 
       handleAction("courier", "cancel_order", result)
+
+	  await refreshCourierOrders()
     } catch (error) {
       console.error('Error cancelling order:', error)
       // Возможно, показать ошибку пользователю
@@ -1586,7 +1863,12 @@ export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }:
                 )}
 
                 <div>
-                  <h3 className="font-semibold mb-3">{t.courier.availableOrders}</h3>
+                  <div className="flex items-center justify-between mb-3">
+  <h3 className="font-semibold">{t.courier.availableOrders}</h3>
+  <Button size="sm" variant="outline" onClick={refreshCourierOrders}>
+    🔄 {language === "ru" ? "Обновить" : "Refresh"}
+  </Button>
+</div>
                   <div className="border rounded-lg overflow-hidden">
                     <Table>
                       <TableHeader>
@@ -1619,8 +1901,11 @@ export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }:
 
                 <div>
                   <div className="flex items-center justify-between">
-                    <h3 className="font-semibold">{t.courier.assignedOrders}</h3>
-                    <div className="flex gap-1">
+  <h3 className="font-semibold">{t.courier.assignedOrders}</h3>
+  <div className="flex gap-1">
+    <Button size="sm" variant="outline" onClick={refreshCourierOrders}>
+      🔄
+    </Button>
                       <Button
                         variant={courierOrdersFilter === "all" ? "default" : "outline"}
                         size="sm"
@@ -1706,8 +1991,20 @@ export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }:
                 )}
 
                 <div>
-                  <h3 className="font-semibold mb-3">{t.driver.tripExchange}</h3>
-                  <div className="border rounded-lg overflow-hidden">
+  <div className="flex items-center justify-between mb-3">
+    <h3 className="font-semibold">{t.driver.tripExchange}</h3>
+    <Button size="sm" variant="outline" onClick={refreshDriverOrders} disabled={isRefreshingDriver}>
+      {isRefreshingDriver ? (
+        <>
+          <div className="h-3 w-3 border-2 border-current border-t-transparent rounded-full animate-spin mr-2" />
+          {language === "ru" ? "Обновление..." : "Refreshing..."}
+        </>
+      ) : (
+        <>🔄 {language === "ru" ? "Обновить" : "Refresh"}</>
+      )}
+    </Button>
+  </div>
+  <div className="border rounded-lg overflow-hidden">
                     <Table>
                       <TableHeader>
                         <TableRow>
@@ -1735,8 +2032,11 @@ export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }:
 
                 <div>
                   <div className="flex items-center justify-between mb-3">
-                    <h3 className="font-semibold">{t.driver.tripFeed}</h3>
-                    <div className="flex gap-2">
+  <h3 className="font-semibold">{t.driver.tripFeed}</h3>
+  <div className="flex gap-2">
+    <Button size="sm" variant="outline" onClick={refreshDriverOrders}>
+      🔄
+    </Button>
                       <Button
                         size="sm"
                         variant={tripFeedFilter === "all" ? "default" : "outline"}
