@@ -3,10 +3,17 @@ import { NextRequest, NextResponse } from 'next/server';
 
 const BACKEND_URL = 'http://91.135.156.173:8000';
 
-export async function GET(request: NextRequest) {
-  // Извлекаем путь после /api/proxy/
-  const urlPath = request.nextUrl.pathname.replace('/api/proxy/', '');
-  const url = `${BACKEND_URL}/${urlPath}?${request.nextUrl.searchParams}`;
+export async function GET(
+  request: NextRequest,
+  context: { params: Promise<{ path: string[] }> }
+) {
+  const params = await context.params;
+  const pathSegments = params.path || [];
+  const apiPath = pathSegments.join('/');
+  const searchParams = request.nextUrl.searchParams.toString();
+  const url = `${BACKEND_URL}/api/${apiPath}${searchParams ? `?${searchParams}` : ''}`;
+
+  console.log('[PROXY GET]', url);
 
   try {
     const backendResponse = await fetch(url, {
@@ -16,18 +23,18 @@ export async function GET(request: NextRequest) {
       },
     });
 
-    // Прокидываем ответ напрямую (поток)
     const responseHeaders = new Headers(backendResponse.headers);
     responseHeaders.delete('transfer-encoding');
     responseHeaders.delete('content-encoding');
 
+    // Явно передаём статус ответа от бэкенда
     return new NextResponse(backendResponse.body, {
       status: backendResponse.status,
       statusText: backendResponse.statusText,
       headers: responseHeaders,
     });
   } catch (error) {
-    console.error('Proxy error:', error);
+    console.error('[PROXY ERROR]', error);
     return NextResponse.json(
       { error: 'Backend unreachable', details: String(error) },
       { status: 502 }
@@ -35,13 +42,18 @@ export async function GET(request: NextRequest) {
   }
 }
 
-export async function POST(request: NextRequest) {
-  // Извлекаем путь после /api/proxy/
-  const urlPath = request.nextUrl.pathname.replace('/api/proxy/', '');
-  const url = `${BACKEND_URL}/${urlPath}`;
+export async function POST(
+  request: NextRequest,
+  context: { params: Promise<{ path: string[] }> }
+) {
+  const params = await context.params;
+  const pathSegments = params.path || [];
+  const apiPath = pathSegments.join('/');
+  const url = `${BACKEND_URL}/api/${apiPath}`;
+
+  console.log('[PROXY POST]', url);
 
   try {
-    // Клонируем тело запроса
     const body = request.body ? await new Response(request.body).arrayBuffer() : undefined;
 
     const backendResponse = await fetch(url, {
@@ -52,18 +64,18 @@ export async function POST(request: NextRequest) {
       body: body ? Buffer.from(body) : undefined,
     });
 
-    // Прокидываем ответ напрямую (поток)
     const responseHeaders = new Headers(backendResponse.headers);
     responseHeaders.delete('transfer-encoding');
-    responseHeaders.delete('content-encoding'); 
+    responseHeaders.delete('content-encoding');
 
+    // Явно передаём статус ответа от бэкенда
     return new NextResponse(backendResponse.body, {
       status: backendResponse.status,
       statusText: backendResponse.statusText,
       headers: responseHeaders,
     });
   } catch (error) {
-    console.error('Proxy error:', error);
+    console.error('[PROXY ERROR]', error);
     return NextResponse.json(
       { error: 'Backend unreachable', details: String(error) },
       { status: 502 }
@@ -71,8 +83,4 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// Важно: явно указываем, что роут динамический
 export const dynamic = 'force-dynamic';
-
-// Опционально: разрешаем только POST (но это не обязательно)
-export const POST_METHOD = 'POST';

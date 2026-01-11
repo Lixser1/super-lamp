@@ -1,5 +1,5 @@
 "use client"
-import { useState, useEffect, useMemo } from "react"
+import React, { useState, useEffect, useMemo, useRef } from "react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -63,13 +63,11 @@ export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }:
     cell: string
   } | null>(null)
 
-  const [availableOrders, setAvailableOrders] = useState(
-    mockOrders.filter((o) => o.status === "available_for_pickup" && !o.courierId),
-  )
-  const [assignedOrders, setAssignedOrders] = useState(mockOrders.filter((o) => o.courierId === 100))
+  const [availableOrders, setAvailableOrders] = useState<any[]>([])
+  const [assignedOrders, setAssignedOrders] = useState<any[]>([])
 
-  const [driverAvailableOrders, setDriverAvailableOrders] = useState(mockDriverExchangeOrders)
-  const [driverAssignedOrders, setDriverAssignedOrders] = useState(mockDriverAssignedOrders)
+  const [driverAvailableOrders, setDriverAvailableOrders] = useState<any[]>(mockDriverExchangeOrders)
+  const [driverAssignedOrders, setDriverAssignedOrders] = useState<any[]>(mockDriverAssignedOrders)
   const [tripState, setTripState] = useState<"at_from_locker" | "in_transit" | "at_to_locker">("at_from_locker")
 
   const [tripFeedFilter, setTripFeedFilter] = useState<"all" | "active" | "archive">("active")
@@ -125,7 +123,11 @@ const [isTabActive, setIsTabActive] = useState(true)
 const [pollingInterval, setPollingInterval] = useState(20000) // 20 секунд по умолчанию
 const [lastFetchTime, setLastFetchTime] = useState<{ [key: string]: number }>({})
 
-  
+  // Refs для polling intervals
+  const courierIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  const driverIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  const clientIntervalRef = useRef<NodeJS.Timeout | null>(null)
+
   type CourierDeliveryStatus =
     | "assigned"
     | "taken_by_courier"
@@ -145,7 +147,7 @@ const [lastFetchTime, setLastFetchTime] = useState<{ [key: string]: number }>({}
 
 // ========== УМНЫЙ POLLING ДЛЯ КУРЬЕРА ==========
 useEffect(() => {
-  if (mode !== "create" || !isTabActive) return
+  if (!isTabActive) return
   
   // Начальная загрузка
   refreshCourierOrders()
@@ -169,21 +171,23 @@ useEffect(() => {
     // Адаптивный интервал: если запрос долгий, увеличиваем интервал
     if (duration > 3000) {
       console.warn('Slow courier request, increasing interval')
-      setPollingInterval(prev => Math.min(prev * 1.5, 60000)) // Максимум 60 сек
+      setPollingInterval(prev => Math.min(prev * 1.5, 60000))
     } else if (duration < 500 && pollingInterval > 20000) {
-      // Если быстро, можно вернуть к норме
       setPollingInterval(20000)
     }
   }
   
-  const intervalId = setInterval(doPoll, pollingInterval)
+  if (courierIntervalRef.current) clearInterval(courierIntervalRef.current)
+  courierIntervalRef.current = setInterval(doPoll, pollingInterval)
   
-  return () => clearInterval(intervalId)
-}, [mode, selectedCourierId, isTabActive, pollingInterval])
+  return () => {
+    if (courierIntervalRef.current) clearInterval(courierIntervalRef.current)
+  }
+}, [selectedCourierId, isTabActive, pollingInterval, lastFetchTime])
 
 // ========== УМНЫЙ POLLING ДЛЯ ВОДИТЕЛЯ ==========
 useEffect(() => {
-  if (mode !== "create" || !isTabActive) return
+  if (!isTabActive) return
   
   refreshDriverOrders()
   
@@ -200,21 +204,55 @@ useEffect(() => {
     const startTime = Date.now()
     await refreshDriverOrders()
     const duration = Date.now() - startTime
-    
-    if (duration > 3000) {
-      console.warn('Slow driver request, increasing interval')
-      setPollingInterval(prev => Math.min(prev * 1.5, 60000))
-    } else if (duration < 500 && pollingInterval > 20000) {
-      setPollingInterval(20000)
-    }
+    console.log(`[POLLING] Driver orders fetched in ${duration}ms, next interval: ${pollingInterval}ms`)
   }
   
-  const intervalId = setInterval(doPoll, pollingInterval)
+  if (driverIntervalRef.current) clearInterval(driverIntervalRef.current)
+  driverIntervalRef.current = setInterval(doPoll, pollingInterval)
   
-  return () => clearInterval(intervalId)
-}, [mode, selectedDriverId, isTabActive, pollingInterval])
+  return () => {
+    if (driverIntervalRef.current) clearInterval(driverIntervalRef.current)
+  }
+}, [selectedDriverId, isTabActive, pollingInterval, lastFetchTime])
 
-// Для клиента НЕ делаем автозагрузку, т.к. заказы добавляются через форму
+// ========== УМНЫЙ POLLING ДЛЯ КЛИЕНТА ==========
+useEffect(() => {
+  if (clientOrders.length === 0 || !isTabActive) return
+
+  // Начальная загрузка
+  refreshClientOrders()
+
+  // Функция polling с кешированием
+  const doPoll = async () => {
+    const now = Date.now()
+    const lastFetch = lastFetchTime['client'] || 0
+
+    // Проверяем: прошло ли достаточно времени с последнего запроса
+    if (now - lastFetch < pollingInterval - 1000) {
+      return // Слишком рано, пропускаем
+    }
+
+    setLastFetchTime(prev => ({ ...prev, client: now }))
+
+    const startTime = Date.now()
+    await refreshClientOrders()
+    const duration = Date.now() - startTime
+
+    if (duration > 3000) {
+      console.warn('Slow client request, increasing interval')
+      setPollingInterval(prev => Math.min(prev * 1.5, 60000))
+    } else if (duration < 1000 && pollingInterval > 5000) {
+      setPollingInterval(prev => Math.max(prev / 1.5, 5000))
+    }
+  }
+
+  if (clientIntervalRef.current) clearInterval(clientIntervalRef.current)
+  clientIntervalRef.current = setInterval(doPoll, pollingInterval)
+
+  return () => {
+    if (clientIntervalRef.current) clearInterval(clientIntervalRef.current)
+  }
+}, [clientOrders.length, isTabActive, pollingInterval, lastFetchTime])
 
 useEffect(() => {
   const handleVisibilityChange = () => {
@@ -321,70 +359,87 @@ useEffect(() => {
   }
 
   const startOrderPolling = (correlationId: string, tempOrderId: number) => {
-  let attempts = 0
-  const maxAttempts = 8 // 8 попыток * 15 секунд = 2 минуты
-  
+  let attempts = 0;
+  const maxAttempts = 8;
   const intervalId = setInterval(async () => {
-    attempts++
-    
+    attempts++;
     try {
-      const response = await fetch(`/api/proxy/api/orders?correlation_id=${correlationId}`)
-      if (!response.ok) {
-        throw new Error('Failed to fetch orders')
+      const response = await fetch(`/api/proxy/orders?correlation_id=${correlationId}`);
+      if (response.status === 404) {
+        if (attempts >= maxAttempts) {
+          clearInterval(intervalId);
+          setClientOrders(prevOrders =>
+            prevOrders.map(order =>
+              order.correlationId === correlationId && order.isLoading
+                ? { ...order, isLoading: false, status: "error" }
+                : order
+            )
+          );
+        }
+        return;
       }
-      const orders = await response.json()
-      if (orders && orders.length > 0) {
-        const realOrder = orders[0]
+      if (!response.ok) throw new Error('Failed to fetch orders');
+
+      const orders = await response.json();
+
+      // Находим заказ с нужным correlationId
+      const realOrder = orders.find((order: any) => order.correlation_id === correlationId);
+
+      if (realOrder) {
         setClientOrders(prevOrders =>
           prevOrders.map(order =>
             order.correlationId === correlationId
               ? {
                   ...order,
-                  id: realOrder.id,
+                  id: realOrder.id, // Обновляем ID на реальный
                   status: realOrder.status || "active",
                   canCancel: realOrder.can_cancel !== false,
                   isLoading: false,
                 }
               : order
           )
-        )
-        setCreatedOrderId(realOrder.id)
-        clearInterval(intervalId)
+        );
+        setCreatedOrderId(realOrder.id);
+        clearInterval(intervalId);
       }
     } catch (error) {
-      console.error('Error polling order:', error)
+      console.error('Error polling order:', error);
+      if (attempts >= maxAttempts) {
+        clearInterval(intervalId);
+        setClientOrders(prevOrders =>
+          prevOrders.map(order =>
+            order.correlationId === correlationId && order.isLoading
+              ? { ...order, isLoading: false, status: "error" }
+              : order
+          )
+        );
+      }
     }
-    
-    // Остановить после 8 попыток (2 минуты)
-    if (attempts >= maxAttempts) {
-      clearInterval(intervalId)
-      setClientOrders(prevOrders =>
-        prevOrders.map(order =>
-          order.correlationId === correlationId && order.isLoading
-            ? { ...order, isLoading: false, status: "error" }
-            : order
-        )
-      )
-    }
-  }, 15000) // Каждые 15 секунд вместо 5
-}
+  }, 15000);
+};
+
+
+
+
+
 
 // ========== ФУНКЦИИ ЗАГРУЗКИ ДАННЫХ ==========
 
 const fetchAllOrders = async () => {
   try {
-    const response = await fetch('/api/proxy/api/orders')
+    const response = await fetch('/api/proxy/orders')
     if (!response.ok) throw new Error('Failed to fetch orders')
     return await response.json()
   } catch (error) {
     console.error('Error fetching orders:', error)
-    return []
+    // Fallback to mock data if API fails
+    return mockOrders
   }
 }
 
 const fetchOrderById = async (orderId: number) => {
   try {
-    const response = await fetch(`/api/proxy/api/orders/${orderId}`)
+    const response = await fetch(`/api/proxy/orders/${orderId}`)
     if (!response.ok) throw new Error('Failed to fetch order')
     return await response.json()
   } catch (error) {
@@ -393,20 +448,12 @@ const fetchOrderById = async (orderId: number) => {
   }
 }
 
-const fetchCellById = async (cellId: number) => {
-  try {
-    const response = await fetch(`/api/proxy/api/cells/${cellId}`)
-    if (!response.ok) throw new Error('Failed to fetch cell')
-    return await response.json()
-  } catch (error) {
-    console.error('Error fetching cell:', error)
-    return null
-  }
-}
+// Removed fetchCellById - endpoint /api/cells/{id} doesn't exist in backend
+// Use /api/lockers/{locker_id}/cells instead if needed
 
 // Обновить заказы клиента
 const refreshClientOrders = async () => {
-  if (isRefreshingClient) return // Предотвращаем двойной запрос
+  if (isRefreshingClient) return
   setIsRefreshingClient(true)
   
   try {
@@ -414,17 +461,16 @@ const refreshClientOrders = async () => {
     const existingIds = clientOrders.map(o => o.id)
     const existingOrders = allOrders.filter((o: any) => existingIds.includes(o.id))
     
-    const clientOrdersList = await Promise.all(existingOrders.map(async (o: any) => {
-      const cell = await fetchCellById(o.source_cell_id)
+    const clientOrdersList = existingOrders.map((o: any) => {
       return {
         id: o.id,
         parcelType: o.parcel_type || 'parcel',
-        cellSize: cell?.size || 'S',
+        cellSize: 'S',
         status: o.status,
         canCancel: ['order_created', 'order_reserved'].includes(o.status),
         isLoading: false,
       }
-    }))
+    })
     
     setClientOrders(prev => {
       const updated = [...prev]
@@ -443,12 +489,10 @@ const refreshClientOrders = async () => {
   }
 }
 
-// Обновить заказы для курьера
-// Обновить заказы для курьера
 const refreshCourierOrders = async () => {
   if (isRefreshingCourier) return // Защита от параллельных запросов
   setIsRefreshingCourier(true)
-  
+  const startTime = Date.now();
   try {
     const allOrders = await fetchAllOrders()
     
@@ -463,41 +507,36 @@ const refreshCourierOrders = async () => {
         !['order_created', 'order_completed', 'order_cancelled'].includes(o.status)
     )
     
-    // Обогащаем только если данные изменились
-    const enrichIfNeeded = async (orders: any[]) => {
+    // Обогащаем данные без запросов к несуществующему эндпоинту
+    const enrichIfNeeded = (orders: any[]) => {
       if (orders.length === 0) return []
       
-      // Кешируем информацию о ячейках
-      const cellCache = new Map()
-      
-      return Promise.all(orders.map(async (o: any) => {
-        // Проверяем кеш перед запросом
-        let sourceCell = cellCache.get(o.source_cell_id)
-        if (!sourceCell) {
-          sourceCell = await fetchCellById(o.source_cell_id)
-          if (sourceCell) cellCache.set(o.source_cell_id, sourceCell)
-        }
-        
+      return orders.map((o: any) => {
         return {
           ...o,
           id: o.id,
           status: o.status,
-          lockerId: sourceCell?.locker_id || 1,
-          cell: sourceCell?.number || 'N/A',
-          size: sourceCell?.size || 'S',
+          lockerId: o.locker_id || 1,
+          cell: o.cell_number || 'N/A',
+          size: o.cell_size || 'S',
         }
-      }))
+      })
     }
     
     // Обогащаем только если есть изменения
     if (JSON.stringify(available) !== JSON.stringify(availableOrders)) {
-      setAvailableOrders(await enrichIfNeeded(available))
+      setAvailableOrders(enrichIfNeeded(available))
     }
     
     if (JSON.stringify(assigned) !== JSON.stringify(assignedOrders)) {
-      setAssignedOrders(await enrichIfNeeded(assigned))
+      setAssignedOrders(enrichIfNeeded(assigned))
     }
-    
+    const duration = Date.now() - startTime;
+    if (duration > 3000) {
+      setPollingInterval(prev => Math.min(prev * 1.5, 60000));
+    } else if (duration < 1000 && pollingInterval > 5000) {
+      setPollingInterval(prev => Math.max(prev / 1.5, 5000));
+    }
   } catch (error) {
     console.error('Error refreshing courier orders:', error)
     // При ошибке увеличиваем интервал
@@ -527,37 +566,29 @@ const refreshDriverOrders = async () => {
         ['order_in_trip', 'order_at_destination'].includes(o.status)
     )
     
-    const enrichIfNeeded = async (orders: any[]) => {
+    const enrichIfNeeded = (orders: any[]) => {
       if (orders.length === 0) return []
       
-      const cellCache = new Map()
-      
-      return Promise.all(orders.map(async (o: any) => {
-        let sourceCell = cellCache.get(o.source_cell_id)
-        if (!sourceCell) {
-          sourceCell = await fetchCellById(o.source_cell_id)
-          if (sourceCell) cellCache.set(o.source_cell_id, sourceCell)
-        }
-        
+      return orders.map((o: any) => {
         return {
           ...o,
           id: o.id,
           tripId: o.trip_id || o.id,
           status: o.status,
           tripStatus: o.trip_status || 'at_from_locker',
-          lockerId: sourceCell?.locker_id || 1,
-          cell: sourceCell?.number || 'N/A',
-          size: sourceCell?.size || 'S',
+          lockerId: o.locker_id || 1,
+          cell: o.cell_number || 'N/A',
+          size: o.cell_size || 'S',
         }
-      }))
+      })
     }
     
     if (JSON.stringify(available) !== JSON.stringify(driverAvailableOrders)) {
-      setDriverAvailableOrders(await enrichIfNeeded(available))
+      setDriverAvailableOrders(enrichIfNeeded(available))
     }
     
     if (JSON.stringify(assigned) !== JSON.stringify(driverAssignedOrders)) {
-      setDriverAssignedOrders(await enrichIfNeeded(assigned))
+      setDriverAssignedOrders(enrichIfNeeded(assigned))
     }
     
   } catch (error) {
@@ -569,53 +600,49 @@ const refreshDriverOrders = async () => {
 }
 
   const handleCreateOrder = async () => {
-    const correlationId = uuidv4()
-    const tempOrderId = Math.floor(Math.random() * 10000) + 1000
-    const data = {
-      client_user_id: parseInt(selectedClientId),
-      parcel_type: parcelType,
-      cell_size: cellSize,
-      sender_delivery: senderDelivery,
-      recipient_delivery: recipientDelivery,
-      correlation_id: correlationId,
-    }
+  const correlationId = uuidv4();
+  const tempOrderId = Math.floor(Math.random() * 10000) + 1000; // Временный ID для отображения на фронте
 
-    try {
-      const response = await fetch('/api/proxy/api/client/create_order_request', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(data),
-      })
+  const data = {
+    client_user_id: parseInt(selectedClientId),
+    parcel_type: parcelType,
+    cell_size: cellSize,
+    sender_delivery: senderDelivery,
+    recipient_delivery: recipientDelivery,
+    correlation_id: correlationId,
+  };
 
-      if (!response.ok) {
-        throw new Error('Network response was not ok')
-      }
+  try {
+    // Отправляем запрос на создание заказа
+    await fetch('/api/proxy/client/create_order_request', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(data),
+    });
 
-      const result = await response.json()
+    // Добавляем заказ в список клиента с временным ID и correlationId
+    setClientOrders([
+      ...clientOrders,
+      {
+        id: tempOrderId, // Временный ID
+        parcelType: parcelType,
+        cellSize: cellSize,
+        status: "processing",
+        canCancel: false,
+        correlationId: correlationId,
+        isLoading: true,
+      },
+    ]);
 
-
-      // Добавить заказ в список клиента с correlationId
-      setClientOrders([
-        ...clientOrders,
-        {
-          id: tempOrderId,
-          parcelType: parcelType,
-          cellSize: cellSize,
-          status: "processing",
-          canCancel: false, // Пока не можем отменить, так как заказ ещё не создан
-          correlationId: correlationId,
-          isLoading: true,
-        },
-      ])
-
-	  startOrderPolling(correlationId, tempOrderId)
-    } catch (error) {
-      console.error('Error creating order:', error)
-      // Здесь можно добавить уведомление об ошибке пользователю
-    }
+    // Запускаем polling для получения реального ID
+    startOrderPolling(correlationId, tempOrderId);
+  } catch (error) {
+    console.error('Error creating order:', error);
   }
+};
+
 
   const handleTakeOrder = async (orderId: number) => {
   const data = {
@@ -626,7 +653,7 @@ const refreshDriverOrders = async () => {
   }
 
   try {
-    const response = await fetch('/api/proxy/api/fsm/enqueue', {
+    const response = await fetch('/api/proxy/fsm/enqueue', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -663,7 +690,7 @@ const refreshDriverOrders = async () => {
       }
 
       try {
-        const response = await fetch('/api/proxy/api/fsm/enqueue', {
+        const response = await fetch('/api/proxy/fsm/enqueue', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -737,7 +764,7 @@ const refreshDriverOrders = async () => {
   }
 
   try {
-    const response = await fetch('/api/proxy/api/fsm/enqueue', {
+    const response = await fetch('/api/proxy/fsm/enqueue', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -768,7 +795,7 @@ const refreshDriverOrders = async () => {
     }
 
     try {
-      const response = await fetch('/api/proxy/api/fsm/enqueue', {
+      const response = await fetch('/api/proxy/fsm/enqueue', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -827,7 +854,7 @@ const refreshDriverOrders = async () => {
   }
 
     try {
-      const response = await fetch('/api/proxy/api/fsm/enqueue', {
+      const response = await fetch('/api/proxy/fsm/enqueue', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -906,7 +933,7 @@ const refreshDriverOrders = async () => {
   }
 
       try {
-        const response = await fetch('/api/proxy/api/fsm/enqueue', {
+        const response = await fetch('/api/proxy/fsm/enqueue', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -954,7 +981,7 @@ const refreshDriverOrders = async () => {
     }
 
     try {
-      const response = await fetch('/api/proxy/api/fsm/enqueue', {
+      const response = await fetch('/api/proxy/fsm/enqueue', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1007,25 +1034,23 @@ const refreshDriverOrders = async () => {
     }
 
     try {
-      const response = await fetch('/api/proxy/api/fsm/enqueue', {
+      const response = await fetch('/api/proxy/fsm/enqueue', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(data),
       })
+      if (response.status === 404) {
+        console.log(`[CANCEL ORDER] Order ${orderId} cannot be cancelled (404)`);
+  setClientOrders(prev =>
+    prev.map(order =>
+      order.id === orderId ? { ...order, status: "cannot_cancel", canCancel: false } : order
+    )
+  );
+  return;
+}
 
-      // if (!response.ok) {
-      //   if (response.status === 404) {
-      //     // Заказ нельзя отменить
-      //     setClientOrders(
-      //       clientOrders.map((order) => (order.id === orderId ? { ...order, status: "cannot_cancel", canCancel: false } : order)),
-      //     )
-      //     console.error('Order cannot be cancelled (404)')
-      //     return
-      //   }
-      //   throw new Error('Network response was not ok')
-      // }
 
       const result = await response.json()
 
@@ -1061,7 +1086,7 @@ const refreshDriverOrders = async () => {
     }
 
     try {
-      const response = await fetch('/api/proxy/api/fsm/enqueue', {
+      const response = await fetch('/api/proxy/fsm/enqueue', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -2234,63 +2259,64 @@ const refreshDriverOrders = async () => {
                         </div>
                       </div>
 
-                      {tripState !== "at_to_locker" ? (
-                        <div>
-                          <h3 className="font-semibold mb-3">{t.driver.reverseOrders}</h3>
-                          <div className="border rounded-lg overflow-hidden">
-                            <Table>
-                              <TableHeader>
-                                <TableRow>
-                                  <TableHead className="w-12"></TableHead>
-                                  <TableHead>{t.driver.orderId}</TableHead>
-                                  <TableHead>{t.driver.cellFrom}</TableHead>
-                                </TableRow>
-                              </TableHeader>
-                              <TableBody>
-                                {reverseOrders.map((order) => {
-                                  const isTaken = takenReverseOrders.includes(order.id)
-                                  const canCheck = tripState === "at_to_locker" && !isTaken
-                                  return (
-                                    <TableRow key={order.id}>
-                                      <TableCell>
-                                        <Checkbox
-                                          checked={selectedReverseOrders.includes(order.id) || isTaken}
-                                          disabled={!canCheck}
-                                          onCheckedChange={(checked) => {
-                                            if (checked) {
-                                              setSelectedReverseOrders([...selectedReverseOrders, order.id])
-                                            } else {
-                                              setSelectedReverseOrders(
-                                                selectedReverseOrders.filter((id) => id !== order.id),
-                                              )
-                                            }
-                                          }}
-                                        />
-                                      </TableCell>
-                                      <TableCell>{order.id}</TableCell>
-                                      <TableCell>
-                                        {order.cell}
-                                        {isTaken && (
-                                          <Badge variant="secondary" className="ml-2">
-                                            {language === "ru" ? "Взят" : "Taken"}
-                                          </Badge>
-                                        )}
-                                      </TableCell>
-                                    </TableRow>
-                                  )
-                                })}
-                              </TableBody>
-                            </Table>
+                      {tripState === "at_to_locker" ? (
+                        <React.Fragment>
+                          <div>
+                            <h3 className="font-semibold mb-3">{t.driver.reverseOrders}</h3>
+                            <div className="border rounded-lg overflow-hidden">
+                              <Table>
+                                <TableHeader>
+                                  <TableRow>
+                                    <TableHead className="w-12"></TableHead>
+                                    <TableHead>{t.driver.orderId}</TableHead>
+                                    <TableHead>{t.driver.cellFrom}</TableHead>
+                                  </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                  {reverseOrders.map((order) => {
+                                    const isTaken = takenReverseOrders.includes(order.id)
+                                    const canCheck = !isTaken
+                                    return (
+                                      <TableRow key={order.id}>
+                                        <TableCell>
+                                          <Checkbox
+                                            checked={selectedReverseOrders.includes(order.id) || isTaken}
+                                            disabled={!canCheck}
+                                            onCheckedChange={(checked) => {
+                                              if (checked) {
+                                                setSelectedReverseOrders([...selectedReverseOrders, order.id])
+                                              } else {
+                                                setSelectedReverseOrders(
+                                                  selectedReverseOrders.filter((id) => id !== order.id),
+                                                )
+                                              }
+                                            }}
+                                          />
+                                        </TableCell>
+                                        <TableCell>{order.id}</TableCell>
+                                        <TableCell>
+                                          {order.cell}
+                                          {isTaken && (
+                                            <Badge variant="secondary" className="ml-2">
+                                              {language === "ru" ? "Взят" : "Taken"}
+                                            </Badge>
+                                          )}
+                                        </TableCell>
+                                      </TableRow>
+                                    )
+                                  })}
+                                </TableBody>
+                              </Table>
+                            </div>
                           </div>
-                        </div>
-                      ) : (
-                        <div>
-                          <div className="flex items-center justify-between mb-3">
-                            <h3 className="font-semibold">{t.driver.freeCells}</h3>
-                            <Button size="sm" variant="outline" onClick={() => setShowPlacedOrders(!showPlacedOrders)}>
-                              {t.driver.showPlacedOrders}
-                            </Button>
-                          </div>
+                          <div className="mt-6">
+                            <div className="flex items-center justify-between mb-3">
+                              <h3 className="font-semibold">{t.driver.freeCells}</h3>
+                              <Button size="sm" variant="outline" onClick={() => setShowPlacedOrders(!showPlacedOrders)}>
+                                {t.driver.showPlacedOrders}
+                              </Button>
+                            </div>
+
 
                           {showPlacedOrders ? (
                             <div className="border rounded-lg overflow-hidden">
@@ -2394,7 +2420,7 @@ const refreshDriverOrders = async () => {
                               )}
                           </div>
                         </div>
-                      )}
+                      </React.Fragment> ) : null}
                     </div>
                   </div>
                 )}
