@@ -48,6 +48,7 @@ export const translations = {
       cannotCancel: "Cannot cancel (already picked up)",
       userId: "User ID",
       selectUserId: "Select user ID",
+      description: "Description",
     },
     recipient: {
       title: "Recipient Actions",
@@ -306,6 +307,7 @@ export const translations = {
       cannotCancel: "Нельзя отменить (уже забран)",
       userId: "ID пользователя",
       selectUserId: "Выберите ID пользователя",
+      description: "Описание",
     },
     recipient: {
       title: "Действия получателя",

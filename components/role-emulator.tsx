@@ -42,8 +42,7 @@ export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }:
   const [clientOrders, setClientOrders] = useState<
     Array<{
       id: number
-      parcelType: string
-      cellSize: string
+      description: string
       status: string
       canCancel: boolean
       correlationId?: string
@@ -120,13 +119,13 @@ const [isRefreshingCourier, setIsRefreshingCourier] = useState(false)
 const [isRefreshingDriver, setIsRefreshingDriver] = useState(false)
 const [isRefreshingClient, setIsRefreshingClient] = useState(false)
 const [isTabActive, setIsTabActive] = useState(true)
-const [pollingInterval, setPollingInterval] = useState(20000) // 20 секунд по умолчанию
+const [pollingInterval, setPollingInterval] = useState(20000)
 const [lastFetchTime, setLastFetchTime] = useState<{ [key: string]: number }>({})
 
-  // Refs для polling intervals
   const courierIntervalRef = useRef<NodeJS.Timeout | null>(null)
   const driverIntervalRef = useRef<NodeJS.Timeout | null>(null)
   const clientIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  
 
   type CourierDeliveryStatus =
     | "assigned"
@@ -145,7 +144,6 @@ const [lastFetchTime, setLastFetchTime] = useState<{ [key: string]: number }>({}
     | "code_received_retry" // New status
     | "request_code_again" // New status
 
-// ========== УМНЫЙ POLLING ДЛЯ КУРЬЕРА ==========
 useEffect(() => {
   if (!isTabActive) return
   
@@ -185,51 +183,41 @@ useEffect(() => {
   }
 }, [selectedCourierId, isTabActive, pollingInterval, lastFetchTime])
 
-// ========== УМНЫЙ POLLING ДЛЯ ВОДИТЕЛЯ ==========
 useEffect(() => {
-  if (!isTabActive) return
-  
-  refreshDriverOrders()
-  
-  const doPoll = async () => {
-    const now = Date.now()
-    const lastFetch = lastFetchTime['driver'] || 0
-    
-    if (now - lastFetch < pollingInterval - 1000) {
-      return
-    }
-    
-    setLastFetchTime(prev => ({ ...prev, driver: now }))
-    
-    const startTime = Date.now()
-    await refreshDriverOrders()
-    const duration = Date.now() - startTime
-    console.log(`[POLLING] Driver orders fetched in ${duration}ms, next interval: ${pollingInterval}ms`)
+  if (selectedClientId) {
+    loadClientOrders();
   }
-  
-  if (driverIntervalRef.current) clearInterval(driverIntervalRef.current)
-  driverIntervalRef.current = setInterval(doPoll, pollingInterval)
-  
+}, [selectedClientId]);
+
+
+useEffect(() => {
+  if (!isTabActive || !selectedClientId) return;
+
+  loadClientOrders();
+
+  if (clientIntervalRef.current) clearInterval(clientIntervalRef.current);
+  clientIntervalRef.current = setInterval(loadClientOrders, pollingInterval);
+
   return () => {
-    if (driverIntervalRef.current) clearInterval(driverIntervalRef.current)
-  }
-}, [selectedDriverId, isTabActive, pollingInterval, lastFetchTime])
+    if (clientIntervalRef.current) clearInterval(clientIntervalRef.current);
+  };
+}, [selectedClientId, isTabActive, pollingInterval, lastFetchTime]);
+
 
 // ========== УМНЫЙ POLLING ДЛЯ КЛИЕНТА ==========
 useEffect(() => {
   if (clientOrders.length === 0 || !isTabActive) return
 
-  // Начальная загрузка
-  refreshClientOrders()
+  loadClientOrders()
 
-  // Функция polling с кешированием
+  
   const doPoll = async () => {
     const now = Date.now()
     const lastFetch = lastFetchTime['client'] || 0
 
-    // Проверяем: прошло ли достаточно времени с последнего запроса
+    
     if (now - lastFetch < pollingInterval - 1000) {
-      return // Слишком рано, пропускаем
+      return 
     }
 
     setLastFetchTime(prev => ({ ...prev, client: now }))
@@ -291,14 +279,13 @@ useEffect(() => {
         const toLockerId = mockLockers.find((l) => l.id !== activeTrip.lockerId)?.id || activeTrip.lockerId
         setLockerTo(toLockerId.toString())
 
-        // If at destination, load free cells
         if (activeTrip.tripStatus === "at_to_locker") {
           const cells = mockLockerCells.filter((c) => c.lockerId === toLockerId && c.status === "free")
           setFreeCells(cells)
         }
       }
     }
-  }, [driverAssignedOrders]) // Rerun when driverAssignedOrders changes
+  }, [driverAssignedOrders]) 
 
   useEffect(() => {
     if (mode === "run" && executionMode === "auto" && isPlaying) {
@@ -358,72 +345,11 @@ useEffect(() => {
     })
   }
 
-  const startOrderPolling = (correlationId: string, tempOrderId: number) => {
-  let attempts = 0;
-  const maxAttempts = 8;
-  const intervalId = setInterval(async () => {
-    attempts++;
-    try {
-      const response = await fetch(`/api/proxy/orders?correlation_id=${correlationId}`);
-      if (response.status === 404) {
-        if (attempts >= maxAttempts) {
-          clearInterval(intervalId);
-          setClientOrders(prevOrders =>
-            prevOrders.map(order =>
-              order.correlationId === correlationId && order.isLoading
-                ? { ...order, isLoading: false, status: "error" }
-                : order
-            )
-          );
-        }
-        return;
-      }
-      if (!response.ok) throw new Error('Failed to fetch orders');
-
-      const orders = await response.json();
-
-      // Находим заказ с нужным correlationId
-      const realOrder = orders.find((order: any) => order.correlation_id === correlationId);
-
-      if (realOrder) {
-        setClientOrders(prevOrders =>
-          prevOrders.map(order =>
-            order.correlationId === correlationId
-              ? {
-                  ...order,
-                  id: realOrder.id, // Обновляем ID на реальный
-                  status: realOrder.status || "active",
-                  canCancel: realOrder.can_cancel !== false,
-                  isLoading: false,
-                }
-              : order
-          )
-        );
-        setCreatedOrderId(realOrder.id);
-        clearInterval(intervalId);
-      }
-    } catch (error) {
-      console.error('Error polling order:', error);
-      if (attempts >= maxAttempts) {
-        clearInterval(intervalId);
-        setClientOrders(prevOrders =>
-          prevOrders.map(order =>
-            order.correlationId === correlationId && order.isLoading
-              ? { ...order, isLoading: false, status: "error" }
-              : order
-          )
-        );
-      }
-    }
-  }, 15000);
-};
 
 
 
 
 
-
-// ========== ФУНКЦИИ ЗАГРУЗКИ ДАННЫХ ==========
 
 const fetchAllOrders = async () => {
   try {
@@ -432,7 +358,6 @@ const fetchAllOrders = async () => {
     return await response.json()
   } catch (error) {
     console.error('Error fetching orders:', error)
-    // Fallback to mock data if API fails
     return mockOrders
   }
 }
@@ -448,46 +373,73 @@ const fetchOrderById = async (orderId: number) => {
   }
 }
 
-// Removed fetchCellById - endpoint /api/cells/{id} doesn't exist in backend
-// Use /api/lockers/{locker_id}/cells instead if needed
-
-// Обновить заказы клиента
-const refreshClientOrders = async () => {
-  if (isRefreshingClient) return
-  setIsRefreshingClient(true)
-  
+const fetchClientOrdersByUserId = async (userId: string) => {
   try {
-    const allOrders = await fetchAllOrders()
-    const existingIds = clientOrders.map(o => o.id)
-    const existingOrders = allOrders.filter((o: any) => existingIds.includes(o.id))
-    
-    const clientOrdersList = existingOrders.map((o: any) => {
-      return {
-        id: o.id,
-        parcelType: o.parcel_type || 'parcel',
-        cellSize: 'S',
-        status: o.status,
-        canCancel: ['order_created', 'order_reserved'].includes(o.status),
-        isLoading: false,
-      }
-    })
-    
-    setClientOrders(prev => {
-      const updated = [...prev]
-      clientOrdersList.forEach(newOrder => {
-        const index = updated.findIndex(o => o.id === newOrder.id)
-        if (index >= 0) {
-          updated[index] = { ...updated[index], ...newOrder }
-        }
-      })
-      return updated
-    })
+    const response = await fetch(`/api/orders/user/${userId}`);
+    if (!response.ok) throw new Error("Failed to fetch client orders");
+    const orders = await response.json();
+    return orders.map((order: any) => ({
+      id: order.id,
+      status: order.status,
+      description: order.description,
+      parcel_type: order.parcel_type,
+      pickup_type: order.pickup_type,
+      delivery_type: order.delivery_type,
+      source_cell_id: order.source_cell_id,
+      dest_cell_id: order.dest_cell_id,
+      created_at: order.created_at ? new Date(order.created_at).toISOString() : null,
+      updated_at: order.updated_at ? new Date(order.updated_at).toISOString() : null,
+    }));
   } catch (error) {
-    console.error('Error refreshing client orders:', error)
-  } finally {
-    setIsRefreshingClient(false)
+    console.error("Error fetching client orders:", error);
+    return [];
   }
-}
+};
+
+const loadClientOrders = async () => {
+  if (isRefreshingClient) return;
+  setIsRefreshingClient(true);
+
+  try {
+    const now = Date.now();
+    const lastFetch = lastFetchTime['client'] || 0;
+
+    if (now - lastFetch < pollingInterval - 1000) {
+      return;
+    }
+
+    setLastFetchTime(prev => ({ ...prev, client: now }));
+
+    const startTime = Date.now();
+    const orders = await fetchClientOrdersByUserId(selectedClientId);
+
+    setClientOrders(
+      orders.map((order: any) => ({
+        id: order.id,
+        description: order.description,
+        status: order.status,
+        canCancel: ["order_created", "order_reserved"].includes(order.status),
+        isLoading: false,
+      }))
+    );
+
+    const duration = Date.now() - startTime;
+
+    if (duration > 3000) {
+      console.warn('Slow client request, increasing interval');
+      setPollingInterval(prev => Math.min(prev * 1.5, 60000));
+    } else if (duration < 1000 && pollingInterval > 5000) {
+      setPollingInterval(prev => Math.max(prev / 1.5, 5000));
+    }
+  } catch (error) {
+    console.error('Error refreshing client orders:', error);
+    setPollingInterval(prev => Math.min(prev * 2, 60000));
+  } finally {
+    setIsRefreshingClient(false);
+  }
+};
+
+
 
 const refreshCourierOrders = async () => {
   if (isRefreshingCourier) return // Защита от параллельных запросов
@@ -546,8 +498,6 @@ const refreshCourierOrders = async () => {
   }
 }
 
-// Обновить заказы для водителя
-// Обновить заказы для водителя
 const refreshDriverOrders = async () => {
   if (isRefreshingDriver) return
   setIsRefreshingDriver(true)
@@ -627,8 +577,7 @@ const refreshDriverOrders = async () => {
       ...clientOrders,
       {
         id: tempOrderId, // Временный ID
-        parcelType: parcelType,
-        cellSize: cellSize,
+        description: `${parcelType} to cell ${cellSize}`,
         status: "processing",
         canCancel: false,
         correlationId: correlationId,
@@ -636,8 +585,7 @@ const refreshDriverOrders = async () => {
       },
     ]);
 
-    // Запускаем polling для получения реального ID
-    startOrderPolling(correlationId, tempOrderId);
+    // Заказ появится автоматически через polling loadClientOrders
   } catch (error) {
     console.error('Error creating order:', error);
   }
@@ -822,6 +770,8 @@ const refreshDriverOrders = async () => {
       // Возможно, показать ошибку пользователю
     }
   }
+
+
 
   const handleGenerateTrip = () => {
     const newTripId = Math.floor(Math.random() * 1000) + 100
@@ -1631,8 +1581,7 @@ const refreshDriverOrders = async () => {
                         <TableHeader>
                           <TableRow>
                             <TableHead>{t.client.orderId}</TableHead>
-                            <TableHead className="hidden md:table-cell">{t.client.parcelType}</TableHead>
-                            <TableHead className="hidden md:table-cell">{t.client.cellSize}</TableHead>
+                            <TableHead>{t.client.description}</TableHead>
                             <TableHead>{t.client.status}</TableHead>
                             <TableHead></TableHead>
                           </TableRow>
@@ -1652,18 +1601,11 @@ const refreshDriverOrders = async () => {
                                   order.id
                                 )}
                               </TableCell>
-                              <TableCell className="hidden md:table-cell">
-                                {order.isLoading ? (  // ДОБАВЛЕНО - заглушка для типа посылки
-                                  <div className="h-4 w-16 bg-muted animate-pulse rounded" />
+                              <TableCell>
+                                {order.isLoading ? (  // ДОБАВЛЕНО - заглушка для описания
+                                  <div className="h-4 w-32 bg-muted animate-pulse rounded" />
                                 ) : (
-                                  order.parcelType === "parcel" ? t.client.parcel : t.client.letter
-                                )}
-                              </TableCell>
-                              <TableCell className="hidden md:table-cell">
-                                {order.isLoading ? (  // ДОБАВЛЕНО - заглушка для размера
-                                  <div className="h-4 w-8 bg-muted animate-pulse rounded" />
-                                ) : (
-                                  order.cellSize
+                                  order.description
                                 )}
                               </TableCell>
                               <TableCell>
