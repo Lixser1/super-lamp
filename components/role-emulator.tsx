@@ -50,7 +50,8 @@ export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }:
     }>
   >([])
 
-  const [createdOrderId, setCreatedOrderId] = useState<number | null>(null)
+  const [orderMessage, setOrderMessage] = useState<string | null>(null)
+  const [courierMessage, setCourierMessage] = useState<string | null>(null)
   const [parcelType, setParcelType] = useState("")
   const [cellSize, setCellSize] = useState("")
   const [senderDelivery, setSenderDelivery] = useState("")
@@ -223,7 +224,7 @@ useEffect(() => {
     setLastFetchTime(prev => ({ ...prev, client: now }))
 
     const startTime = Date.now()
-    await refreshClientOrders()
+    await loadClientOrders()
     const duration = Date.now() - startTime
 
     if (duration > 3000) {
@@ -412,9 +413,10 @@ const loadClientOrders = async () => {
 
     const startTime = Date.now();
     const orders = await fetchClientOrdersByUserId(selectedClientId);
+    const filteredOrders = orders.filter((order: any) => order.status !== "order_cancelled");
 
     setClientOrders(
-      orders.map((order: any) => ({
+      filteredOrders.map((order: any) => ({
         id: order.id,
         description: order.description,
         status: order.status,
@@ -438,6 +440,7 @@ const loadClientOrders = async () => {
     setIsRefreshingClient(false);
   }
 };
+
 
 
 
@@ -550,6 +553,7 @@ const refreshDriverOrders = async () => {
 }
 
   const handleCreateOrder = async () => {
+  setOrderMessage(null); // Сбрасываем предыдущее сообщение
   const correlationId = uuidv4();
   const tempOrderId = Math.floor(Math.random() * 10000) + 1000; // Временный ID для отображения на фронте
 
@@ -564,7 +568,7 @@ const refreshDriverOrders = async () => {
 
   try {
     // Отправляем запрос на создание заказа
-    await fetch('/api/proxy/client/create_order_request', {
+    const response = await fetch('/api/proxy/client/create_order_request', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -572,27 +576,39 @@ const refreshDriverOrders = async () => {
       body: JSON.stringify(data),
     });
 
-    // Добавляем заказ в список клиента с временным ID и correlationId
-    setClientOrders([
-      ...clientOrders,
-      {
-        id: tempOrderId, // Временный ID
-        description: `${parcelType} to cell ${cellSize}`,
-        status: "processing",
-        canCancel: false,
-        correlationId: correlationId,
-        isLoading: true,
-      },
-    ]);
+    const result = await response.json();
 
-    // Заказ появится автоматически через polling loadClientOrders
+    // Устанавливаем сообщение из ответа
+    setOrderMessage(result.message || 'Неизвестная ошибка');
+
+    if (result.success) {
+      // Добавляем заказ в список клиента с временным ID и correlationId
+      setClientOrders([
+        ...clientOrders,
+        {
+          id: tempOrderId, // Временный ID
+          description: `${parcelType} to cell ${cellSize}`,
+          status: "processing",
+          canCancel: false,
+          correlationId: correlationId,
+          isLoading: true,
+        },
+      ]);
+
+      // Заказ появится автоматически через polling loadClientOrders
+    } else {
+      // Если заказ не создан, не добавляем в список
+      console.log('Order creation failed:', result.message);
+    }
   } catch (error) {
     console.error('Error creating order:', error);
+    setOrderMessage('Ошибка при создании заказа');
   }
 };
 
 
   const handleTakeOrder = async (orderId: number) => {
+  setCourierMessage(null); // Сбрасываем предыдущее сообщение
   const data = {
     entity_type: "order",
     entity_id: orderId,
@@ -614,16 +630,19 @@ const refreshDriverOrders = async () => {
     }
 
     const result = await response.json()
+    setCourierMessage(result.message || 'Действие выполнено');
     handleAction("courier", "take_order", result)
     
     // ДОБАВЛЕНО: Обновить списки после действия
     await refreshCourierOrders()
   } catch (error) {
     console.error('Error taking order:', error)
+    setCourierMessage('Ошибка при взятии заказа');
   }
 }
 
   const handleCourierDeliveryAction = async (orderId: number, action: string) => {
+    setCourierMessage(null); // Сбрасываем предыдущее сообщение
     let processName = ""
     if (action === "confirm_placed") {
       processName = "courier_place_in_cell"
@@ -651,9 +670,11 @@ const refreshDriverOrders = async () => {
         }
 
         const result = await response.json()
+        setCourierMessage(result.message || 'Действие выполнено');
         handleAction("courier", action, result)
       } catch (error) {
         console.error('Error performing delivery action:', error)
+        setCourierMessage('Ошибка при выполнении действия');
         return // Не обновляем состояние, если ошибка
       }
     }
@@ -976,58 +997,56 @@ const refreshDriverOrders = async () => {
   }
 
   const handleCancelClientOrder = async (orderId: number) => {
-    const data = {
-      entity_type: "order",
-      entity_id: orderId,
-      process_name: "client_cancel_order",
-      user_id: parseInt(selectedClientId),
-    }
+  const data = {
+    entity_type: "order",
+    entity_id: orderId,
+    process_name: "cancel_order",
+    user_id: parseInt(selectedClientId),
+  };
 
-    try {
-      const response = await fetch('/api/proxy/fsm/enqueue', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(data),
-      })
-      if (response.status === 404) {
-        console.log(`[CANCEL ORDER] Order ${orderId} cannot be cancelled (404)`);
-  setClientOrders(prev =>
-    prev.map(order =>
-      order.id === orderId ? { ...order, status: "cannot_cancel", canCancel: false } : order
-    )
-  );
-  return;
-}
-
-
-      const result = await response.json()
-
-      // Проверяем, если бэкенд вернул ошибку в теле ответа
-      if (result.error || result.status === 'error' || result.message?.includes('cannot')) {
-        setClientOrders(
-          clientOrders.map((order) => (order.id === orderId ? { ...order, status: "cannot_cancel", canCancel: false } : order)),
+  try {
+    const response = await fetch('/api/proxy/fsm/enqueue', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(data),
+    });
+    if (response.status === 404) {
+      console.log(`[CANCEL ORDER] Order ${orderId} cannot be cancelled (404)`);
+      setClientOrders(prev =>
+        prev.map(order =>
+          order.id === orderId ? { ...order, status: "cannot_cancel", canCancel: false } : order
         )
-        console.error('Order cannot be cancelled:', result.message || 'Unknown error')
-        return
-      }
-
-      // Обновляем локальный статус
-      setClientOrders(
-        clientOrders.map((order) => (order.id === orderId ? { ...order, status: "cancelled", canCancel: false } : order)),
-      )
-
-      handleAction("client", "cancel_order", result)
-
-	  await refreshClientOrders()
-    } catch (error) {
-      console.error('Error cancelling order:', error)
-      // Возможно, показать ошибку пользователю
+      );
+      return;
     }
+
+    const result = await response.json();
+
+    if (result.error || result.status === 'error' || result.message?.includes('cannot')) {
+      setClientOrders(
+        clientOrders.map((order) => (order.id === orderId ? { ...order, status: "cannot_cancel", canCancel: false } : order)),
+      );
+      console.error('Order cannot be cancelled:', result.message || 'Unknown error');
+      return;
+    }
+
+    // Локально удаляем заказ из списка
+    setClientOrders(
+      clientOrders.filter((order) => order.id !== orderId)
+    );
+
+    handleAction("client", "cancel_order", result);
+    await loadClientOrders();
+  } catch (error) {
+    console.error('Error cancelling order:', error);
   }
+};
+
 
   const handleCancelCourierOrder = async (orderId: number) => {
+    setCourierMessage(null); // Сбрасываем предыдущее сообщение
     const data = {
       entity_type: "order",
       entity_id: orderId,
@@ -1049,6 +1068,7 @@ const refreshDriverOrders = async () => {
       }
 
       const result = await response.json()
+      setCourierMessage(result.message || 'Заказ отменен');
 
       // Обновляем локальное состояние
       const order = assignedOrders.find((o) => o.id === orderId)
@@ -1062,7 +1082,7 @@ const refreshDriverOrders = async () => {
 	  await refreshCourierOrders()
     } catch (error) {
       console.error('Error cancelling order:', error)
-      // Возможно, показать ошибку пользователю
+      setCourierMessage('Ошибка при отмене заказа');
     }
   }
 
@@ -1499,10 +1519,10 @@ const refreshDriverOrders = async () => {
                   </div>
                 )}
 
-                {createdOrderId && !clientOrders.some(o => o.isLoading) && (
+                {orderMessage && (
                   <div>
-                    <Badge variant="default" className="bg-green-600">
-                      {t.client.orderId}: {createdOrderId}
+                    <Badge variant="default" className={orderMessage.includes('успешно') ? 'bg-green-600' : 'bg-red-600'}>
+                      {orderMessage}
                     </Badge>
                   </div>
                 )}
@@ -1829,12 +1849,17 @@ const refreshDriverOrders = async () => {
                   </div>
                 )}
 
+                {courierMessage && (
+                  <div>
+                    <Badge variant="default" className={courierMessage.includes('Ошибка') || courierMessage.includes('не удалось') ? 'bg-red-600' : 'bg-green-600'}>
+                      {courierMessage}
+                    </Badge>
+                  </div>
+                )}
+
                 <div>
                   <div className="flex items-center justify-between mb-3">
   <h3 className="font-semibold">{t.courier.availableOrders}</h3>
-  <Button size="sm" variant="outline" onClick={refreshCourierOrders}>
-    🔄 {language === "ru" ? "Обновить" : "Refresh"}
-  </Button>
 </div>
                   <div className="border rounded-lg overflow-hidden">
                     <Table>
@@ -1870,9 +1895,6 @@ const refreshDriverOrders = async () => {
                   <div className="flex items-center justify-between">
   <h3 className="font-semibold">{t.courier.assignedOrders}</h3>
   <div className="flex gap-1">
-    <Button size="sm" variant="outline" onClick={refreshCourierOrders}>
-      🔄
-    </Button>
                       <Button
                         variant={courierOrdersFilter === "all" ? "default" : "outline"}
                         size="sm"
@@ -1960,16 +1982,6 @@ const refreshDriverOrders = async () => {
                 <div>
   <div className="flex items-center justify-between mb-3">
     <h3 className="font-semibold">{t.driver.tripExchange}</h3>
-    <Button size="sm" variant="outline" onClick={refreshDriverOrders} disabled={isRefreshingDriver}>
-      {isRefreshingDriver ? (
-        <>
-          <div className="h-3 w-3 border-2 border-current border-t-transparent rounded-full animate-spin mr-2" />
-          {language === "ru" ? "Обновление..." : "Refreshing..."}
-        </>
-      ) : (
-        <>🔄 {language === "ru" ? "Обновить" : "Refresh"}</>
-      )}
-    </Button>
   </div>
   <div className="border rounded-lg overflow-hidden">
                     <Table>
@@ -2001,9 +2013,6 @@ const refreshDriverOrders = async () => {
                   <div className="flex items-center justify-between mb-3">
   <h3 className="font-semibold">{t.driver.tripFeed}</h3>
   <div className="flex gap-2">
-    <Button size="sm" variant="outline" onClick={refreshDriverOrders}>
-      🔄
-    </Button>
                       <Button
                         size="sm"
                         variant={tripFeedFilter === "all" ? "default" : "outline"}
