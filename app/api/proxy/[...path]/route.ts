@@ -42,6 +42,7 @@ export async function GET(
   }
 }
 
+// app/api/proxy/[...path]/route.ts
 export async function POST(
   request: NextRequest,
   context: { params: Promise<{ path: string[] }> }
@@ -51,24 +52,28 @@ export async function POST(
   const apiPath = pathSegments.join('/');
   const url = `${BACKEND_URL}/api/${apiPath}`;
 
-  console.log('[PROXY POST]', url);
+  console.log('[PROXY POST] Request to:', url);
+  console.log('[PROXY POST] Request method:', request.method);
+  console.log('[PROXY POST] Request headers:', Object.fromEntries(request.headers.entries()));
 
   try {
-    const body = request.body ? await new Response(request.body).arrayBuffer() : undefined;
+    const body = request.body ? await request.text() : undefined;
 
     const backendResponse = await fetch(url, {
-      method: 'POST',
+      method: request.method, // Передаём метод из запроса
       headers: {
         'Content-Type': request.headers.get('Content-Type') || 'application/json',
+        'Authorization': request.headers.get('Authorization') || '', // Если нужен авторизационный заголовок
       },
-      body: body ? Buffer.from(body) : undefined,
+      body: body,
     });
+
+    console.log('[PROXY POST] Backend response status:', backendResponse.status);
 
     const responseHeaders = new Headers(backendResponse.headers);
     responseHeaders.delete('transfer-encoding');
     responseHeaders.delete('content-encoding');
 
-    // Явно передаём статус ответа от бэкенда
     return new NextResponse(backendResponse.body, {
       status: backendResponse.status,
       statusText: backendResponse.statusText,
@@ -82,5 +87,6 @@ export async function POST(
     );
   }
 }
+
 
 export const dynamic = 'force-dynamic';

@@ -32,6 +32,16 @@ interface RoleEmulatorProps {
   onTabChange?: (tab: string) => void
 }
 
+// types/fsm.ts
+interface FsmEnqueueRequest {
+  entity_type: "order";
+  entity_id: number;
+  process_name: string;
+  user_id: number;
+  target_user_id: number;
+}
+
+
 export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }: RoleEmulatorProps) {
   const [mode, setMode] = useState<"create" | "run">("create")
   const [selectedClientId, setSelectedClientId] = useState<string>("1001")
@@ -606,40 +616,44 @@ const refreshDriverOrders = async () => {
   }
 };
 
+async function enqueueOrder(data: FsmEnqueueRequest) {
+  const response = await fetch("/api/proxy/fsm/enqueue", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(data),
+  });
+
+  if (!response.ok) {
+    throw new Error("Ошибка при отправке запроса");
+  }
+
+  return await response.json();
+}
+
 
   const handleTakeOrder = async (orderId: number) => {
-  setCourierMessage(null); // Сбрасываем предыдущее сообщение
-  const data = {
+  setCourierMessage(null);
+
+  const requestData: FsmEnqueueRequest = {
     entity_type: "order",
     entity_id: orderId,
-    process_name: "courier_take_order",
+    process_name: "order_assign_courier1", // Исправлено на нужный процесс
     user_id: parseInt(selectedCourierId),
-  }
+    target_user_id: parseInt(selectedCourierId), // Оба ID совпадают
+  };
 
   try {
-    const response = await fetch('/api/proxy/fsm/enqueue', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(data),
-    })
-
-    if (!response.ok) {
-      throw new Error('Network response was not ok')
-    }
-
-    const result = await response.json()
-    setCourierMessage(result.message || 'Действие выполнено');
-    handleAction("courier", "take_order", result)
-    
-    // ДОБАВЛЕНО: Обновить списки после действия
-    await refreshCourierOrders()
+    const result = await enqueueOrder(requestData);
+    setCourierMessage(result.message || "Действие выполнено");
+    handleAction("courier", "take_order", result);
+    await refreshCourierOrders();
   } catch (error) {
-    console.error('Error taking order:', error)
-    setCourierMessage('Ошибка при взятии заказа');
+    console.error("Error taking order:", error);
+    setCourierMessage("Ошибка при взятии заказа");
   }
-}
+};
 
   const handleCourierDeliveryAction = async (orderId: number, action: string) => {
     setCourierMessage(null); // Сбрасываем предыдущее сообщение
@@ -1050,7 +1064,7 @@ const refreshDriverOrders = async () => {
     const data = {
       entity_type: "order",
       entity_id: orderId,
-      process_name: "courier_cancel_order",
+      process_name: "cancel_order",
       user_id: parseInt(selectedCourierId),
     }
 
