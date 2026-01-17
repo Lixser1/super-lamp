@@ -138,37 +138,16 @@ const [lastFetchTime, setLastFetchTime] = useState<{ [key: string]: number }>({}
   const clientIntervalRef = useRef<NodeJS.Timeout | null>(null)
   
 
-  type CourierDeliveryStatus =
-    | "assigned"
-    | "taken_by_courier"
-    | "waiting_for_code"
-    | "code_received"
-    | "locker_opened"
-    | "parcel_placed"
-    | "waiting_for_close"
-    | "locker_closed"
-    | "locker_did_not_open"
-    | "locker_did_not_close"
-    | "taken_from_exchange"
-    | "placed_in_cell"
-    | "waiting_for_code_retry" // New status
-    | "code_received_retry" // New status
-    | "request_code_again" // New status
 
 useEffect(() => {
   if (!isTabActive) return
-  
-  // Начальная загрузка
   refreshCourierOrders()
-  
-  // Функция polling с кешированием
   const doPoll = async () => {
     const now = Date.now()
     const lastFetch = lastFetchTime['courier'] || 0
     
-    // Проверяем: прошло ли достаточно времени с последнего запроса
     if (now - lastFetch < pollingInterval - 1000) {
-      return // Слишком рано, пропускаем
+      return
     }
     
     setLastFetchTime(prev => ({ ...prev, courier: now }))
@@ -177,7 +156,6 @@ useEffect(() => {
     await refreshCourierOrders()
     const duration = Date.now() - startTime
     
-    // Адаптивный интервал: если запрос долгий, увеличиваем интервал
     if (duration > 3000) {
       console.warn('Slow courier request, increasing interval')
       setPollingInterval(prev => Math.min(prev * 1.5, 60000))
@@ -345,6 +323,10 @@ useEffect(() => {
       setActiveTripId(null)
     }
   }, [driverAssignedOrders])
+  useEffect(() => {
+  refreshDriverOrders();
+}, [selectedDriverId, isTabActive]); 
+
 
   const handleAction = (role: string, action: string, extraData?: any) => {
     console.log(`[API] POST /${role}/${action}`, extraData || {})
@@ -356,22 +338,20 @@ useEffect(() => {
     })
   }
 
-
-
-
-
-
-
 const fetchAllOrders = async () => {
   try {
-    const response = await fetch('/api/proxy/orders')
-    if (!response.ok) throw new Error('Failed to fetch orders')
-    return await response.json()
+    const response = await fetch('/api/proxy/orders');
+    if (!response.ok) throw new Error('Failed to fetch orders');
+
+    const data = await response.json();
+    console.log("Fetched orders from backend:", data); // Лог для отладки
+    return data;
   } catch (error) {
-    console.error('Error fetching orders:', error)
-    return mockOrders
+    console.error('Error fetching orders:', error);
+    return mockOrders; // Возвращаем мок-данные только в случае ошибки
   }
-}
+};
+
 
 const fetchOrderById = async (orderId: number) => {
   try {
@@ -512,55 +492,49 @@ const refreshCourierOrders = async () => {
 }
 
 const refreshDriverOrders = async () => {
-  if (isRefreshingDriver) return
-  setIsRefreshingDriver(true)
-  
+  if (isRefreshingDriver) return;
+  setIsRefreshingDriver(true);
+
   try {
-    const allOrders = await fetchAllOrders()
-    
+    const allOrders = await fetchAllOrders();
+    console.log("Fetched all orders:", allOrders); // Лог для отладки
+
     const available = allOrders.filter(
-      (o: any) => 
-        o.pickup_type === 'courier' && 
+      (o: any) =>
+        o.pickup_type === 'courier' &&
         ['order_ready_for_trip', 'order_created'].includes(o.status)
-    )
-    
+    );
+
     const assigned = allOrders.filter(
-      (o: any) => 
+      (o: any) =>
         ['order_in_trip', 'order_at_destination'].includes(o.status)
-    )
-    
+    );
+
+    console.log("Available orders:", available); // Лог для отладки
+    console.log("Assigned orders:", assigned); // Лог для отладки
+
     const enrichIfNeeded = (orders: any[]) => {
-      if (orders.length === 0) return []
-      
-      return orders.map((o: any) => {
-        return {
-          ...o,
-          id: o.id,
-          tripId: o.trip_id || o.id,
-          status: o.status,
-          tripStatus: o.trip_status || 'at_from_locker',
-          lockerId: o.locker_id || 1,
-          cell: o.cell_number || 'N/A',
-          size: o.cell_size || 'S',
-        }
-      })
-    }
-    
-    if (JSON.stringify(available) !== JSON.stringify(driverAvailableOrders)) {
-      setDriverAvailableOrders(enrichIfNeeded(available))
-    }
-    
-    if (JSON.stringify(assigned) !== JSON.stringify(driverAssignedOrders)) {
-      setDriverAssignedOrders(enrichIfNeeded(assigned))
-    }
-    
+      if (orders.length === 0) return [];
+      return orders.map((o: any) => ({
+        ...o,
+        id: o.id,
+        tripId: o.trip_id || o.id,
+        status: o.status,
+        tripStatus: o.trip_status || 'at_from_locker',
+        lockerId: o.locker_id || 1,
+        cell: o.cell_number || 'N/A',
+        size: o.cell_size || 'S',
+      }));
+    };
+
+    setDriverAvailableOrders(enrichIfNeeded(available));
+    setDriverAssignedOrders(enrichIfNeeded(assigned));
   } catch (error) {
-    console.error('Error refreshing driver orders:', error)
-    setPollingInterval(prev => Math.min(prev * 2, 60000))
+    console.error('Error refreshing driver orders:', error);
   } finally {
-    setIsRefreshingDriver(false)
+    setIsRefreshingDriver(false);
   }
-}
+};
 
   const handleCreateOrder = async () => {
   setOrderMessage(null); // Сбрасываем предыдущее сообщение
@@ -626,11 +600,13 @@ async function enqueueOrder(data: FsmEnqueueRequest) {
   });
 
   if (!response.ok) {
-    throw new Error("Ошибка при отправке запроса");
+    const errorData = await response.json();
+    throw new Error(errorData.message || "Ошибка при отправке запроса");
   }
 
   return await response.json();
 }
+
 
 
   const handleTakeOrder = async (orderId: number) => {
@@ -738,73 +714,50 @@ async function enqueueOrder(data: FsmEnqueueRequest) {
   }
 
   const handleTakeDriverOrder = async (orderId: number) => {
-  // ИСПРАВЛЕНО: entity_type должен быть "order", а не "trip"
-  const data = {
+  const requestData: FsmEnqueueRequest = {
     entity_type: "order",
     entity_id: orderId,
-    process_name: "trip_assign_driver",
+    process_name: "trip_assign_driver", // Специфичный процесс для водителя
     user_id: parseInt(selectedDriverId),
-  }
+    target_user_id: parseInt(selectedDriverId), // Оба ID совпадают
+  };
 
   try {
-    const response = await fetch('/api/proxy/fsm/enqueue', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(data),
-    })
-
-    if (!response.ok) {
-      throw new Error('Network response was not ok')
-    }
-
-    const result = await response.json()
-    handleAction("driver", "take_order", result)
-    
-    // ДОБАВЛЕНО: Обновить списки
-    await refreshDriverOrders()
+    const result = await enqueueOrder(requestData);
+    handleAction("driver", "take_order", result);
+    await refreshDriverOrders();
   } catch (error) {
-    console.error('Error taking driver order:', error)
+    console.error("Error taking driver order:", error);
   }
-}
+};
+
 
   const handleCancelDriverOrder = async (orderId: number) => {
-    const data = {
-      entity_type: "order",
-      entity_id: orderId,
-      process_name: "cancel_order",
-      user_id: parseInt(selectedDriverId),
+  const requestData: FsmEnqueueRequest = {
+    entity_type: "order",
+    entity_id: orderId,
+    process_name: "cancel_order", // Универсальный процесс для отмены
+    user_id: parseInt(selectedDriverId),
+    target_user_id: parseInt(selectedDriverId), // Оба ID совпадают
+  };
+
+  try {
+    const result = await enqueueOrder(requestData);
+
+    // Обновляем локальное состояние
+    const order = driverAssignedOrders.find((o) => o.id === orderId);
+    if (order) {
+      setDriverAssignedOrders(driverAssignedOrders.filter((o) => o.id !== orderId));
+      setDriverAvailableOrders([...driverAvailableOrders, { ...order, driverId: null, status: "available_for_driver" }]);
     }
 
-    try {
-      const response = await fetch('/api/proxy/fsm/enqueue', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(data),
-      })
-
-      if (!response.ok) {
-        throw new Error('Network response was not ok')
-      }
-
-      const result = await response.json()
-
-      // Обновляем локальное состояние
-      const order = driverAssignedOrders.find((o) => o.id === orderId)
-      if (order) {
-        setDriverAssignedOrders(driverAssignedOrders.filter((o) => o.id !== orderId))
-        setDriverAvailableOrders([...driverAvailableOrders, { ...order, driverId: null, status: "available_for_driver" }])
-      }
-
-      handleAction("driver", "cancel_order", result)
-    } catch (error) {
-      console.error('Error cancelling driver order:', error)
-      // Возможно, показать ошибку пользователю
-    }
+    handleAction("driver", "cancel_order", result);
+    await refreshDriverOrders();
+  } catch (error) {
+    console.error("Error cancelling driver order:", error);
   }
+};
+
 
 
 
@@ -829,7 +782,6 @@ async function enqueueOrder(data: FsmEnqueueRequest) {
     handleAction("driver", "generate_trip", { trip_id: newTripId, from: fromLockerId, to: toLockerId })
   }
 
-  // Updated handleStartTrip signature to accept tripId
   const handleStartTrip = async (tripId: number) => {
     const data = {
     entity_type: "order",
@@ -906,109 +858,84 @@ async function enqueueOrder(data: FsmEnqueueRequest) {
   }
 
   const handleChangeTripState = async (newState: "at_from_locker" | "in_transit" | "at_to_locker") => {
-    if (tripState === "in_transit" && newState === "at_from_locker") return
-    if (tripState === "at_to_locker" && (newState === "at_from_locker" || newState === "in_transit")) return
-
-    if (newState === "at_to_locker") {
-      const data = {
-    entity_type: "order", // ИСПРАВЛЕНО
-    entity_id: tripId || activeTripId,
-    process_name: "arrive_at_destination",
-    user_id: parseInt(selectedDriverId),
-  }
-
-      try {
-        const response = await fetch('/api/proxy/fsm/enqueue', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(data),
-        })
-
-        if (!response.ok) {
-          throw new Error('Network response was not ok')
-        }
-
-        const result = await response.json()
-        handleAction("driver", "arrive_at_destination", result)
-      } catch (error) {
-        console.error('Error arriving at destination:', error)
-        return // Не обновляем состояние, если ошибка
-      }
-    }
-
-    setTripState(newState)
-
-    if (newState === "at_to_locker") {
-      const toLockerId = Number.parseInt(lockerTo)
-      const cells = mockLockerCells.filter((c) => c.lockerId === toLockerId && c.status === "free")
-      setFreeCells(cells)
-
-      if (activeTripId) {
-        setDriverAssignedOrders(
-          driverAssignedOrders.map((o) => (o.tripId === activeTripId ? { ...o, tripStatus: "at_to_locker" } : o)),
-        )
-      }
-    }
-
-    if (newState !== "at_to_locker") {
-      handleAction("driver", "change_trip_state", { trip_id: tripId, state: newState })
-    }
-  }
-
-  const handlePlaceParcelInCell = async (orderId: number, cellNumber: string) => {
-    const data = {
+  if (newState === "at_to_locker") {
+    const requestData: FsmEnqueueRequest = {
       entity_type: "order",
-      entity_id: orderId,
-      process_name: "open_cell",
+      entity_id: tripId || activeTripId!,
+      process_name: "arrive_at_destination", // Процесс для прибытия
       user_id: parseInt(selectedDriverId),
-    }
+      target_user_id: parseInt(selectedDriverId), // Оба ID совпадают
+    };
 
     try {
-      const response = await fetch('/api/proxy/fsm/enqueue', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(data),
-      })
-
-      if (!response.ok) {
-        throw new Error('Network response was not ok')
-      }
-
-      const result = await response.json()
-
-      // Обновляем локальное состояние
-      const order = [...directOrders, ...reverseOrders].find((o) => o.id === orderId)
-      if (!order) return
-
-      const cell = freeCells.find((c) => c.number === cellNumber)
-      if (!cell) return
-
-      const sizeOrder = { P: 1, S: 2, M: 3, L: 4 }
-      const orderSize = sizeOrder[order.size as keyof typeof sizeOrder] || 0
-      const cellSizeValue = sizeOrder[cell.size as keyof typeof sizeOrder] || 0
-
-      if (orderSize > cellSizeValue) {
-        console.log("[v0] Cannot place larger parcel in smaller cell")
-        return
-      }
-
-      // Remove order from taken orders
-      setTakenDirectOrders(takenDirectOrders.filter((id) => id !== orderId))
-      setTakenReverseOrders(takenReverseOrders.filter((id) => id !== orderId))
-
-      setPlacedParcels({ ...placedParcels, [cellNumber]: { orderId, originalSize: order.size } })
-      setFreeCells(freeCells.filter((c) => c.number !== cellNumber))
-
-      handleAction("driver", "place_parcel_in_cell", result)
+      const result = await enqueueOrder(requestData);
+      handleAction("driver", "arrive_at_destination", result);
     } catch (error) {
-      console.error('Error placing parcel in cell:', error)
-      // Возможно, показать ошибку пользователю
+      console.error("Error arriving at destination:", error);
+      return;
     }
   }
+
+  setTripState(newState);
+
+  if (newState === "at_to_locker") {
+    const toLockerId = Number.parseInt(lockerTo);
+    const cells = mockLockerCells.filter((c) => c.lockerId === toLockerId && c.status === "free");
+    setFreeCells(cells);
+
+    if (activeTripId) {
+      setDriverAssignedOrders(
+        driverAssignedOrders.map((o) => (o.tripId === activeTripId ? { ...o, tripStatus: "at_to_locker" } : o)),
+      );
+    }
+  }
+
+  if (newState !== "at_to_locker") {
+    handleAction("driver", "change_trip_state", { trip_id: tripId, state: newState });
+  }
+};
+
+
+  const handlePlaceParcelInCell = async (orderId: number, cellNumber: string) => {
+  const requestData: FsmEnqueueRequest = {
+    entity_type: "order",
+    entity_id: orderId,
+    process_name: "open_cell", // Процесс для открытия ячейки
+    user_id: parseInt(selectedDriverId),
+    target_user_id: parseInt(selectedDriverId), // Оба ID совпадают
+  };
+
+  try {
+    const result = await enqueueOrder(requestData);
+
+    // Обновляем локальное состояние
+    const order = [...directOrders, ...reverseOrders].find((o) => o.id === orderId);
+    if (!order) return;
+
+    const cell = freeCells.find((c) => c.number === cellNumber);
+    if (!cell) return;
+
+    const sizeOrder = { P: 1, S: 2, M: 3, L: 4 };
+    const orderSize = sizeOrder[order.size as keyof typeof sizeOrder] || 0;
+    const cellSizeValue = sizeOrder[cell.size as keyof typeof sizeOrder] || 0;
+
+    if (orderSize > cellSizeValue) {
+      console.log("[v0] Cannot place larger parcel in smaller cell");
+      return;
+    }
+
+    setTakenDirectOrders(takenDirectOrders.filter((id) => id !== orderId));
+    setTakenReverseOrders(takenReverseOrders.filter((id) => id !== orderId));
+
+    setPlacedParcels({ ...placedParcels, [cellNumber]: { orderId, originalSize: order.size } });
+    setFreeCells(freeCells.filter((c) => c.number !== cellNumber));
+
+    handleAction("driver", "place_parcel_in_cell", result);
+  } catch (error) {
+    console.error("Error placing parcel in cell:", error);
+  }
+};
+
 
   const handleCancelClientOrder = async (orderId: number) => {
   const data = {
@@ -2100,7 +2027,6 @@ async function enqueueOrder(data: FsmEnqueueRequest) {
                                 </Badge>
                               </TableCell>
                               <TableCell className="space-x-2">
-                                {/* CHANGE: Show different buttons based on trip status */}
                                 {order.tripStatus === "in_transit" ? (
                                   <Button
                                     size="sm"
