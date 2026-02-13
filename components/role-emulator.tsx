@@ -48,6 +48,8 @@ export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }:
   const [selectedRecipientId, setSelectedRecipientId] = useState<string>("2001")
   const [selectedCourierId, setSelectedCourierId] = useState<string>("100")
   const [selectedDriverId, setSelectedDriverId] = useState<string>("200")
+  const [ordersFilter, setOrdersFilter] = useState<"in" | "out">("in");
+
 
   const [clientOrders, setClientOrders] = useState<
     Array<{
@@ -66,6 +68,10 @@ export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }:
   const [cellSize, setCellSize] = useState("")
   const [senderDelivery, setSenderDelivery] = useState("")
   const [recipientDelivery, setRecipientDelivery] = useState("")
+
+  const [courier1ExchangeOrders, setCourier1ExchangeOrders] = useState<any[]>([]);
+const [courier2ExchangeOrders, setCourier2ExchangeOrders] = useState<any[]>([]);
+
 
   const [recipientOrderInfo, setRecipientOrderInfo] = useState<{
     orderId: number
@@ -353,6 +359,7 @@ const fetchAllOrders = async () => {
 };
 
 
+
 const fetchOrderById = async (orderId: number) => {
   try {
     const response = await fetch(`/api/proxy/orders/${orderId}`)
@@ -435,47 +442,45 @@ const loadClientOrders = async () => {
 
 
 const refreshCourierOrders = async () => {
-  if (isRefreshingCourier) return // Защита от параллельных запросов
-  setIsRefreshingCourier(true)
+  if (isRefreshingCourier) return;
+  setIsRefreshingCourier(true);
   const startTime = Date.now();
   try {
-    const allOrders = await fetchAllOrders()
-    
-    // Фильтруем на клиенте, а не на сервере (снижаем нагрузку на БД)
-    const available = allOrders.filter(
-      (o: any) => o.pickup_type === 'courier' && o.status === 'order_created'
-    )
-    
+    const allOrders = await fetchAllOrders();
+
+    // Фильтруем заказы в зависимости от активного фильтра
+    let available = [];
+    if (ordersFilter === "in") {
+      available = allOrders.filter(
+        (o: any) => o.pickup_type === 'courier' && o.status === 'order_created'
+      );
+    } else if (ordersFilter === "out") {
+      available = allOrders.filter(
+        (o: any) => o.pickup_type === 'courier' && o.status === 'order_courier1_assigned'
+      );
+    }
+
     const assigned = allOrders.filter(
-      (o: any) => 
-        o.pickup_type === 'courier' && 
-        !['order_created', 'order_completed', 'order_cancelled'].includes(o.status)
-    )
-    
-    // Обогащаем данные без запросов к несуществующему эндпоинту
+      (o: any) =>
+        o.pickup_type === 'courier' &&
+        !['order_created', 'order_completed'].includes(o.status)
+    );
+
     const enrichIfNeeded = (orders: any[]) => {
-      if (orders.length === 0) return []
-      
-      return orders.map((o: any) => {
-        return {
-          ...o,
-          id: o.id,
-          status: o.status,
-          lockerId: o.locker_id || 1,
-          cell: o.cell_number || 'N/A',
-          size: o.cell_size || 'S',
-        }
-      })
-    }
-    
-    // Обогащаем только если есть изменения
-    if (JSON.stringify(available) !== JSON.stringify(availableOrders)) {
-      setAvailableOrders(enrichIfNeeded(available))
-    }
-    
-    if (JSON.stringify(assigned) !== JSON.stringify(assignedOrders)) {
-      setAssignedOrders(enrichIfNeeded(assigned))
-    }
+      if (orders.length === 0) return [];
+      return orders.map((o: any) => ({
+        ...o,
+        id: o.id,
+        status: o.status,
+        lockerId: o.locker_id || 1,
+        cell: o.cell_number || 'N/A',
+        size: o.cell_size || 'S',
+      }));
+    };
+
+    setAvailableOrders(enrichIfNeeded(available));
+    setAssignedOrders(enrichIfNeeded(assigned));
+
     const duration = Date.now() - startTime;
     if (duration > 3000) {
       setPollingInterval(prev => Math.min(prev * 1.5, 60000));
@@ -483,13 +488,13 @@ const refreshCourierOrders = async () => {
       setPollingInterval(prev => Math.max(prev / 1.5, 5000));
     }
   } catch (error) {
-    console.error('Error refreshing courier orders:', error)
-    // При ошибке увеличиваем интервал
-    setPollingInterval(prev => Math.min(prev * 2, 60000))
+    console.error('Error refreshing courier orders:', error);
+    setPollingInterval(prev => Math.min(prev * 2, 60000));
   } finally {
-    setIsRefreshingCourier(false)
+    setIsRefreshingCourier(false);
   }
-}
+};
+
 
 const refreshDriverOrders = async () => {
   if (isRefreshingDriver) return;
@@ -1147,7 +1152,6 @@ async function enqueueOrder(data: FsmEnqueueRequest) {
       locker_did_not_close: { en: t.courier.statusLockerDidNotClose, ru: t.courier.statusLockerDidNotClose },
       taken_from_exchange: { en: language === "ru" ? "Взят с биржи" : "Taken from exchange", ru: "Взят с биржи" },
       placed_in_cell: { en: language === "ru" ? "Положен в ячейку" : "Placed in cell", ru: "Положен в ячейку" },
-      // New status translations
       waiting_for_code_retry: { en: "Waiting for code (retry)", ru: "Ожидание кода (повтор)" },
       code_received_retry: { en: "Code received (retry)", ru: "Код получен (повтор)" },
       request_code_again: { en: "Request code again", ru: "Запросить код снова" },
@@ -1156,14 +1160,16 @@ async function enqueueOrder(data: FsmEnqueueRequest) {
   }
 
   const filteredAssignedOrders = useMemo(() => {
-    if (courierOrdersFilter === "all") {
-      return assignedOrders
-    } else if (courierOrdersFilter === "active") {
-      return assignedOrders.filter((order) => order.status !== "locker_closed")
-    } else {
-      return assignedOrders.filter((order) => order.status === "locker_closed")
-    }
-  }, [assignedOrders, courierOrdersFilter])
+  if (courierOrdersFilter === "all") {
+    return assignedOrders
+  } else if (courierOrdersFilter === "active") {
+    return assignedOrders.filter((order) => order.status !== "locker_closed" && order.status !== "order_cancelled")
+  } else {
+    return assignedOrders.filter((order) => order.status === "locker_closed" || order.status === "order_cancelled")
+  }
+}, [assignedOrders, courierOrdersFilter])
+
+
 
   const renderCourierActionButtons = (order: any) => {
     const canCancel = !["parcel_placed", "waiting_for_close", "locker_closed"].includes(order.status)
@@ -1803,6 +1809,22 @@ async function enqueueOrder(data: FsmEnqueueRequest) {
   <h3 className="font-semibold">{t.courier.availableOrders}</h3>
 </div>
                   <div className="border rounded-lg overflow-hidden">
+                    <div className="flex gap-1">
+    <Button
+      variant={ordersFilter === "in" ? "default" : "outline"}
+      size="sm"
+      onClick={() => setOrdersFilter("in")}
+    >
+      в
+    </Button>
+    <Button
+      variant={ordersFilter === "out" ? "default" : "outline"}
+      size="sm"
+      onClick={() => setOrdersFilter("out")}
+    >
+      из
+    </Button>
+  </div>
                     <Table>
                       <TableHeader>
                         <TableRow>
