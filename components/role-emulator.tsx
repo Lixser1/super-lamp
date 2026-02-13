@@ -147,8 +147,8 @@ const [lastFetchTime, setLastFetchTime] = useState<{ [key: string]: number }>({}
 
 useEffect(() => {
   if (!isTabActive) return
-  refreshCourierOrders()
-  const doPoll = async () => {
+  refreshCourierOrders();
+    const doPoll = async () => {
     const now = Date.now()
     const lastFetch = lastFetchTime['courier'] || 0
     
@@ -346,7 +346,14 @@ useEffect(() => {
 
 const fetchAllOrders = async () => {
   try {
-    const response = await fetch('/api/proxy/orders');
+    // Получаем courier_id из мок-данных
+    const courier = mockCouriers.find((c) => c.id === parseInt(selectedCourierId));
+    if (!courier) {
+      throw new Error('Courier not found');
+    }
+
+    // Формируем URL с параметром courier_id
+    const response = await fetch(`/api/proxy/courier/exchange?courier_id=${courier.id}`);
     if (!response.ok) throw new Error('Failed to fetch orders');
 
     const data = await response.json();
@@ -357,6 +364,7 @@ const fetchAllOrders = async () => {
     return mockOrders; // Возвращаем мок-данные только в случае ошибки
   }
 };
+
 
 
 
@@ -445,35 +453,41 @@ const refreshCourierOrders = async () => {
   if (isRefreshingCourier) return;
   setIsRefreshingCourier(true);
   const startTime = Date.now();
+
   try {
-    const allOrders = await fetchAllOrders();
+    const response = await fetchAllOrders();
+    console.log("Fetched courier exchange data:", response);
+
+    const allOrders = response.orders || [];
 
     // Фильтруем заказы в зависимости от активного фильтра
     let available = [];
     if (ordersFilter === "in") {
       available = allOrders.filter(
-        (o: any) => o.pickup_type === 'courier' && o.status === 'order_created'
+        (o: any) => o.type === 'pickup' && o.status === 'order_created'
       );
     } else if (ordersFilter === "out") {
       available = allOrders.filter(
-        (o: any) => o.pickup_type === 'courier' && o.status === 'order_courier1_assigned'
+        (o: any) => o.type === 'pickup' && o.status === 'order_parcel_confirmed_post2'
       );
     }
 
+    // Заказы, которые уже назначены курьеру
     const assigned = allOrders.filter(
       (o: any) =>
-        o.pickup_type === 'courier' &&
+        o.type === 'pickup' &&
         !['order_created', 'order_completed'].includes(o.status)
     );
 
+    // Обогащаем данные, если нужно
     const enrichIfNeeded = (orders: any[]) => {
       if (orders.length === 0) return [];
       return orders.map((o: any) => ({
         ...o,
         id: o.id,
         status: o.status,
-        lockerId: o.locker_id || 1,
-        cell: o.cell_number || 'N/A',
+        lockerId: 1, // Используем фиксированное значение, если нет locker_id
+        cell: o.source_cell_code || 'N/A',
         size: o.cell_size || 'S',
       }));
     };
@@ -494,7 +508,6 @@ const refreshCourierOrders = async () => {
     setIsRefreshingCourier(false);
   }
 };
-
 
 const refreshDriverOrders = async () => {
   if (isRefreshingDriver) return;
@@ -1773,150 +1786,156 @@ async function enqueueOrder(data: FsmEnqueueRequest) {
           </TabsContent>
 
           <TabsContent value="courier" className="mt-0">
-            <Card>
-              <CardHeader>
-                <CardTitle>{t.courier.title}</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-6">
-                {mode === "create" && (
-                  <div>
-                    <Label htmlFor="courier-id">{t.courier.courierId}</Label>
-                    <Select value={selectedCourierId} onValueChange={setSelectedCourierId}>
-                      <SelectTrigger id="courier-id">
-                        <SelectValue placeholder={t.courier.selectCourierId} />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {mockCouriers.map((courier) => (
-                          <SelectItem key={courier.id} value={courier.id.toString()}>
-                            {courier.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                )}
+  <Card>
+    <CardHeader>
+      <CardTitle>{t.courier.title}</CardTitle>
+    </CardHeader>
+    <CardContent className="space-y-6">
+      {mode === "create" && (
+        <div>
+          <Label htmlFor="courier-id">{t.courier.courierId}</Label>
+          <Select value={selectedCourierId} onValueChange={setSelectedCourierId}>
+            <SelectTrigger id="courier-id">
+              <SelectValue placeholder={t.courier.selectCourierId} />
+            </SelectTrigger>
+            <SelectContent>
+              {mockCouriers.map((courier) => (
+                <SelectItem key={courier.id} value={courier.id.toString()}>
+                  {courier.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
 
-                {courierMessage && (
-                  <div>
-                    <Badge variant="default" className={courierMessage.includes('Ошибка') || courierMessage.includes('не удалось') ? 'bg-red-600' : 'bg-green-600'}>
-                      {courierMessage}
+      {courierMessage && (
+        <div>
+          <Badge variant="default" className={courierMessage.includes('Ошибка') || courierMessage.includes('не удалось') ? 'bg-red-600' : 'bg-green-600'}>
+            {courierMessage}
+          </Badge>
+        </div>
+      )}
+
+      {/* Доступные заказы */}
+      <div>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="font-semibold">{t.courier.availableOrders}</h3>
+        </div>
+        <div className="border rounded-lg overflow-hidden">
+          <div className="flex gap-1">
+            <Button
+              variant={ordersFilter === "in" ? "default" : "outline"}
+              size="sm"
+              onClick={() => setOrdersFilter("in")}
+            >
+              в
+            </Button>
+            <Button
+              variant={ordersFilter === "out" ? "default" : "outline"}
+              size="sm"
+              onClick={() => setOrdersFilter("out")}
+            >
+              из
+            </Button>
+          </div>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>{t.courier.orderId}</TableHead>
+                <TableHead>{t.courier.locker}</TableHead>
+                <TableHead>{t.courier.cell}</TableHead>
+                <TableHead>{t.courier.size}</TableHead>
+                <TableHead></TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {availableOrders.map((order) => (
+                <TableRow key={order.id}>
+                  <TableCell>{order.id}</TableCell>
+                  <TableCell>
+                    {mockLockers.find((l) => l.id === order.lockerId)?.address || 'N/A'}
+                  </TableCell>
+                  <TableCell>{order.cell || 'N/A'}</TableCell>
+                  <TableCell>{order.size || 'N/A'}</TableCell>
+                  <TableCell>
+                    <Button size="sm" onClick={() => handleTakeOrder(order.id)}>
+                      {t.courier.takeOrder}
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      </div>
+
+      {/* Назначенные заказы */}
+      <div>
+        <div className="flex items-center justify-between">
+          <h3 className="font-semibold">{t.courier.assignedOrders}</h3>
+          <div className="flex gap-1">
+            <Button
+              variant={courierOrdersFilter === "all" ? "default" : "outline"}
+              size="sm"
+              onClick={() => setCourierOrdersFilter("all")}
+            >
+              {t.driver.all}
+            </Button>
+            <Button
+              variant={courierOrdersFilter === "active" ? "default" : "outline"}
+              size="sm"
+              onClick={() => setCourierOrdersFilter("active")}
+            >
+              {t.driver.active}
+            </Button>
+            <Button
+              variant={courierOrdersFilter === "archive" ? "default" : "outline"}
+              size="sm"
+              onClick={() => setCourierOrdersFilter("archive")}
+            >
+              {t.driver.archive}
+            </Button>
+          </div>
+        </div>
+        <div className="border rounded-lg overflow-hidden">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>{t.courier.orderId}</TableHead>
+                <TableHead>{t.courier.status}</TableHead>
+                <TableHead></TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {filteredAssignedOrders.map((order) => (
+                <TableRow key={order.id}>
+                  <TableCell>{order.id}</TableCell>
+                  <TableCell>
+                    <Badge
+                      variant={
+                        ["locker_did_not_open", "locker_did_not_close"].includes(order.status)
+                          ? "destructive"
+                          : order.status === "locker_closed"
+                            ? "secondary"
+                            : "default"
+                      }
+                    >
+                      {getCourierStatusLabel(order.status)}
                     </Badge>
-                  </div>
-                )}
+                  </TableCell>
+                  <TableCell>{renderCourierActionButtons(order)}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      </div>
+    </CardContent>
+  </Card>
+</TabsContent>
 
-                <div>
-                  <div className="flex items-center justify-between mb-3">
-  <h3 className="font-semibold">{t.courier.availableOrders}</h3>
-</div>
-                  <div className="border rounded-lg overflow-hidden">
-                    <div className="flex gap-1">
-    <Button
-      variant={ordersFilter === "in" ? "default" : "outline"}
-      size="sm"
-      onClick={() => setOrdersFilter("in")}
-    >
-      в
-    </Button>
-    <Button
-      variant={ordersFilter === "out" ? "default" : "outline"}
-      size="sm"
-      onClick={() => setOrdersFilter("out")}
-    >
-      из
-    </Button>
-  </div>
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>{t.courier.orderId}</TableHead>
-                          <TableHead>{t.courier.locker}</TableHead>
-                          <TableHead>{t.courier.cell}</TableHead>
-                          <TableHead>{t.courier.size}</TableHead>
-                          <TableHead></TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {availableOrders.map((order) => (
-                          <TableRow key={order.id}>
-                            <TableCell>{order.id}</TableCell>
-                            <TableCell>{mockLockers.find((l) => l.id === order.lockerId)?.address}</TableCell>
-                            <TableCell>{order.cell}</TableCell>
-                            <TableCell>{order.size}</TableCell>
-                            <TableCell>
-                              <Button size="sm" onClick={() => handleTakeOrder(order.id)}>
-                                {t.courier.takeOrder}
-                              </Button>
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </div>
-                </div>
 
-                <div>
-                  <div className="flex items-center justify-between">
-  <h3 className="font-semibold">{t.courier.assignedOrders}</h3>
-  <div className="flex gap-1">
-                      <Button
-                        variant={courierOrdersFilter === "all" ? "default" : "outline"}
-                        size="sm"
-                        onClick={() => setCourierOrdersFilter("all")}
-                      >
-                        {t.driver.all}
-                      </Button>
-                      <Button
-                        variant={courierOrdersFilter === "active" ? "default" : "outline"}
-                        size="sm"
-                        onClick={() => setCourierOrdersFilter("active")}
-                      >
-                        {t.driver.active}
-                      </Button>
-                      <Button
-                        variant={courierOrdersFilter === "archive" ? "default" : "outline"}
-                        size="sm"
-                        onClick={() => setCourierOrdersFilter("archive")}
-                      >
-                        {t.driver.archive}
-                      </Button>
-                    </div>
-                  </div>
-                  <div className="border rounded-lg overflow-hidden">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>{t.courier.orderId}</TableHead>
-                          <TableHead>{t.courier.status}</TableHead>
-                          <TableHead></TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {filteredAssignedOrders.map((order) => (
-                          <TableRow key={order.id}>
-                            <TableCell>{order.id}</TableCell>
-                            <TableCell>
-                              <Badge
-                                variant={
-                                  ["locker_did_not_open", "locker_did_not_close"].includes(order.status)
-                                    ? "destructive"
-                                    : order.status === "locker_closed"
-                                      ? "secondary"
-                                      : "default"
-                                }
-                              >
-                                {getCourierStatusLabel(order.status)}
-                              </Badge>
-                            </TableCell>
-                            <TableCell>{renderCourierActionButtons(order)}</TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          </TabsContent>
 
           <TabsContent value="driver" className="mt-0">
             <Card>
@@ -2599,9 +2618,3 @@ async function enqueueOrder(data: FsmEnqueueRequest) {
     </div>
   )
 }
-
-const mockTests = [
-  { id: 1, name: "Client creates order", steps: 5 },
-  { id: 2, name: "FSM: reserve_cell on order", steps: 4 },
-  { id: 3, name: "Driver bulk delivery", steps: 6 },
-]
