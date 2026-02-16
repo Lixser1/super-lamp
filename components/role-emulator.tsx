@@ -49,6 +49,8 @@ export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }:
   const [selectedCourierId, setSelectedCourierId] = useState<string>("100")
   const [selectedDriverId, setSelectedDriverId] = useState<string>("200")
   const [ordersFilter, setOrdersFilter] = useState<"in" | "out">("in");
+  const [recipientUserId, setRecipientUserId] = useState<string>("");
+
 
 
   const [clientOrders, setClientOrders] = useState<
@@ -566,6 +568,7 @@ const refreshDriverOrders = async () => {
     sender_delivery: senderDelivery,
     recipient_delivery: recipientDelivery,
     correlation_id: correlationId,
+    recipient_user_id: recipientUserId,
   };
 
   try {
@@ -1479,6 +1482,18 @@ async function enqueueOrder(data: FsmEnqueueRequest) {
                   </div>
                 )}
 
+                <div>
+  <Label htmlFor="recipient-user-id">{t.client.recipientUserId || "ID получателя"}</Label>
+  <Input
+    id="recipient-user-id"
+    type="text"
+    placeholder="Введите ID получателя"
+    value={recipientUserId}
+    onChange={(e) => setRecipientUserId(e.target.value)}
+  />
+</div>
+
+
                 {orderMessage && (
                   <div>
                     <Badge variant="default" className={orderMessage.includes('успешно') ? 'bg-green-600' : 'bg-red-600'}>
@@ -1546,7 +1561,7 @@ async function enqueueOrder(data: FsmEnqueueRequest) {
                 <div className="flex gap-2 flex-wrap">
                   <Button
                     onClick={handleCreateOrder}
-                    disabled={!parcelType || !cellSize || !senderDelivery || !recipientDelivery}
+                    disabled={!parcelType || !cellSize || !senderDelivery || !recipientDelivery || !recipientUserId}
                     className={highlightedAction === "create_order" ? "animate-pulse" : ""}
                   >
                     {t.client.createOrder}
