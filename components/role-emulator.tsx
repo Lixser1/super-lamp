@@ -50,6 +50,8 @@ export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }:
   const [selectedDriverId, setSelectedDriverId] = useState<string>("200")
   const [ordersFilter, setOrdersFilter] = useState<"in" | "out">("in");
   const [recipientUserId, setRecipientUserId] = useState<string>("");
+  const [selectedCity, setSelectedCity] = useState<string>("МСК");
+
 
 
 
@@ -335,6 +337,10 @@ useEffect(() => {
   refreshDriverOrders();
 }, [selectedDriverId, isTabActive]); 
 
+useEffect(() => {
+  refreshDriverOrders();
+}, [selectedCity, isTabActive]);
+
 
   const handleAction = (role: string, action: string, extraData?: any) => {
     console.log(`[API] POST /${role}/${action}`, extraData || {})
@@ -516,45 +522,19 @@ const refreshDriverOrders = async () => {
   setIsRefreshingDriver(true);
 
   try {
-    const allOrders = await fetchAllOrders();
-    console.log("Fetched all orders:", allOrders); // Лог для отладки
-
-    const available = allOrders.filter(
-      (o: any) =>
-        o.pickup_type === 'courier' &&
-        ['order_ready_for_trip', 'order_created'].includes(o.status)
-    );
-
-    const assigned = allOrders.filter(
-      (o: any) =>
-        ['order_in_trip', 'order_at_destination'].includes(o.status)
-    );
-
-    console.log("Available orders:", available); // Лог для отладки
-    console.log("Assigned orders:", assigned); // Лог для отладки
-
-    const enrichIfNeeded = (orders: any[]) => {
-      if (orders.length === 0) return [];
-      return orders.map((o: any) => ({
-        ...o,
-        id: o.id,
-        tripId: o.trip_id || o.id,
-        status: o.status,
-        tripStatus: o.trip_status || 'at_from_locker',
-        lockerId: o.locker_id || 1,
-        cell: o.cell_number || 'N/A',
-        size: o.cell_size || 'S',
-      }));
-    };
-
-    setDriverAvailableOrders(enrichIfNeeded(available));
-    setDriverAssignedOrders(enrichIfNeeded(assigned));
+    const orders = await fetchDriverExchangeOrders(selectedCity);
+    // Просто сохраняем пришедшие заказы без преобразований
+    setDriverAvailableOrders(orders);
+    setDriverAssignedOrders([]);
   } catch (error) {
-    console.error('Error refreshing driver orders:', error);
+    console.error("Error refreshing driver orders:", error);
   } finally {
     setIsRefreshingDriver(false);
   }
 };
+
+
+
 
   const handleCreateOrder = async () => {
   setOrderMessage(null); // Сбрасываем предыдущее сообщение
@@ -1090,6 +1070,23 @@ async function enqueueOrder(data: FsmEnqueueRequest) {
     )
     handleAction("operator", "remove_driver", { trip_id: tripId })
   }
+
+  const fetchDriverExchangeOrders = async (city: string) => {
+  try {
+    const cityParam = city === "МСК" ? "МСК" : "СПБ";
+    const response = await fetch(`/api/proxy/driver/exchange?city=${cityParam}`);
+    if (!response.ok) throw new Error("Failed to fetch orders");
+    const data = await response.json();
+    console.log("Fetched orders:", data); // Проверьте, что данные приходят
+    return data; // Возвращаем весь ответ, если структура: { orders: [...] }
+  } catch (error) {
+    console.error("Error fetching driver exchange orders:", error);
+    return []; // Возвращаем пустой массив в случае ошибки
+  }
+};
+
+
+
 
   const calculateWaitingTime = (createdDate: Date) => {
     const now = new Date()
@@ -1957,6 +1954,19 @@ async function enqueueOrder(data: FsmEnqueueRequest) {
               <CardHeader>
                 <CardTitle>{t.driver.title}</CardTitle>
               </CardHeader>
+              <div className="mb-4">
+  <Label htmlFor="city-select">{language === "ru" ? "Город" : "City"}</Label>
+  <Select value={selectedCity} onValueChange={setSelectedCity}>
+    <SelectTrigger id="city-select" className="w-[180px]">
+      <SelectValue placeholder={language === "ru" ? "Выберите город" : "Select city"} />
+    </SelectTrigger>
+    <SelectContent>
+      <SelectItem value="МСК">МСК</SelectItem>
+      <SelectItem value="СПБ">СПБ</SelectItem>
+    </SelectContent>
+  </Select>
+</div>
+
               <CardContent className="space-y-6">
                 {mode === "create" && (
                   <div>
@@ -1982,27 +1992,31 @@ async function enqueueOrder(data: FsmEnqueueRequest) {
   </div>
   <div className="border rounded-lg overflow-hidden">
                     <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>{t.driver.tripId}</TableHead>
-                          <TableHead>{t.driver.locker}</TableHead>
-                          <TableHead></TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {driverAvailableOrders.map((order) => (
-                          <TableRow key={order.id}>
-                            <TableCell>{order.tripId}</TableCell>
-                            <TableCell>{mockLockers.find((l) => l.id === order.lockerId)?.address}</TableCell>
-                            <TableCell>
-                              <Button size="sm" onClick={() => handleTakeDriverOrder(order.id)}>
-                                {t.driver.takeOrder}
-                              </Button>
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
+  <TableHeader>
+    <TableRow>
+      <TableHead>ID</TableHead>
+      <TableHead>{language === "ru" ? "Откуда" : "From"}</TableHead>
+      <TableHead>{language === "ru" ? "Куда" : "To"}</TableHead>
+      <TableHead></TableHead>
+    </TableRow>
+  </TableHeader>
+  <TableBody>
+    {driverAvailableOrders.map((order) => (
+      <TableRow key={order.id}>
+        <TableCell>{order.id}</TableCell>
+        <TableCell>{order.from_city}</TableCell>
+        <TableCell>{order.to_city}</TableCell>
+        <TableCell>
+          <Button size="sm" onClick={() => handleTakeDriverOrder(order.id)}>
+            {t.driver.takeOrder}
+          </Button>
+        </TableCell>
+      </TableRow>
+    ))}
+  </TableBody>
+</Table>
+
+
                   </div>
                 </div>
 
