@@ -1473,9 +1473,9 @@ const fetchUsers = async () => {
                         <SelectValue placeholder={t.recipient.selectUserId} />
                       </SelectTrigger>
                       <SelectContent>
-                        {[2001, 2002, 2003, 2004, 2005].map((id) => (
-                          <SelectItem key={id} value={id.toString()}>
-                            {language === "ru" ? "Получатель" : "Recipient"} #{id}
+                        {users.filter((user) => user.role_name === "recipient" || user.role_name === "client").map((user) => (
+                          <SelectItem key={user.id} value={user.id.toString()}>
+                            {language === "ru" ? "Получатель" : "Recipient"} #{user.id}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -1599,7 +1599,7 @@ const fetchUsers = async () => {
               <SelectValue placeholder={t.courier.selectCourierId} />
             </SelectTrigger>
             <SelectContent>
-              {mockCouriers.map((courier) => (
+              {users.filter((user) => user.role_name === "courier").map((courier) => (
                 <SelectItem key={courier.id} value={courier.id.toString()}>
                   {courier.name}
                 </SelectItem>
@@ -1764,9 +1764,9 @@ const fetchUsers = async () => {
                         <SelectValue placeholder={t.driver.selectDriverId} />
                       </SelectTrigger>
                       <SelectContent>
-                        {[200, 201, 202, 203, 204].map((id) => (
-                          <SelectItem key={id} value={id.toString()}>
-                            {language === "ru" ? "Водитель" : "Driver"} #{id}
+                        {users.filter((user) => user.role_name === "driver").map((user) => (
+                          <SelectItem key={user.id} value={user.id.toString()}>
+                            {language === "ru" ? "Водитель" : "Driver"} #{user.id}
                           </SelectItem>
                         ))}
                       </SelectContent>
