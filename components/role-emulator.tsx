@@ -21,9 +21,10 @@ import {
   mockOrderDetails,
   mockDriverExchangeOrders,
   mockDriverAssignedOrders,
-  mockLockerCells, // Assuming mockLockerCells is available for free cell lookup
+  mockLockerCells,
 } from "@/lib/mock-data"
 import { v4 as uuidv4 } from 'uuid';
+import { ClientForm } from "./client-form"
 
 interface RoleEmulatorProps {
   addLog: (log: any) => void
@@ -32,7 +33,6 @@ interface RoleEmulatorProps {
   onTabChange?: (tab: string) => void
 }
 
-// types/fsm.ts
 interface FsmEnqueueRequest {
   entity_type: "order";
   entity_id: number;
@@ -40,6 +40,15 @@ interface FsmEnqueueRequest {
   user_id: number;
   target_user_id: number;
 }
+
+interface User {
+  id: number;
+  name: string;
+  role_name: string;
+  city: string | null;
+  phone: string | null;
+}
+
 
 
 export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }: RoleEmulatorProps) {
@@ -51,6 +60,8 @@ export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }:
   const [ordersFilter, setOrdersFilter] = useState<"in" | "out">("in");
   const [recipientUserId, setRecipientUserId] = useState<string>("");
   const [selectedCity, setSelectedCity] = useState<string>("МСК");
+const [users, setUsers] = useState<User[]>([]);
+const [isLoadingUsers, setIsLoadingUsers] = useState(false);
 
 
 
@@ -73,8 +84,6 @@ export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }:
   const [senderDelivery, setSenderDelivery] = useState("")
   const [recipientDelivery, setRecipientDelivery] = useState("")
 
-  const [courier1ExchangeOrders, setCourier1ExchangeOrders] = useState<any[]>([]);
-const [courier2ExchangeOrders, setCourier2ExchangeOrders] = useState<any[]>([]);
 
 
   const [recipientOrderInfo, setRecipientOrderInfo] = useState<{
@@ -148,6 +157,9 @@ const [lastFetchTime, setLastFetchTime] = useState<{ [key: string]: number }>({}
   const clientIntervalRef = useRef<NodeJS.Timeout | null>(null)
   
 
+useEffect(() => {
+  fetchUsers();
+}, []);
 
 useEffect(() => {
   if (!isTabActive) return
@@ -533,9 +545,6 @@ const refreshDriverOrders = async () => {
   }
 };
 
-
-
-
   const handleCreateOrder = async () => {
   setOrderMessage(null); // Сбрасываем предыдущее сообщение
   const correlationId = uuidv4();
@@ -607,8 +616,6 @@ async function enqueueOrder(data: FsmEnqueueRequest) {
 
   return await response.json();
 }
-
-
 
   const handleTakeOrder = async (orderId: number) => {
   setCourierMessage(null);
@@ -758,30 +765,19 @@ async function enqueueOrder(data: FsmEnqueueRequest) {
     console.error("Error cancelling driver order:", error);
   }
 };
-
-
-
-
-  const handleGenerateTrip = () => {
-    const newTripId = Math.floor(Math.random() * 1000) + 100
-    setTripId(newTripId)
-    setTripState("at_from_locker")
-
-    const fromLockerId = Number.parseInt(lockerFrom)
-    const toLockerId = Number.parseInt(lockerTo)
-
-    const direct = mockOrders.filter((o) => o.lockerId === fromLockerId).slice(0, 5)
-    const reverse = mockOrders.filter((o) => o.lockerId === toLockerId).slice(0, 3)
-
-    setDirectOrders(direct)
-    setReverseOrders(reverse)
-    setSelectedDirectOrders([])
-    setSelectedReverseOrders([])
-    setTakenDirectOrders([])
-    setTakenReverseOrders([])
-
-    handleAction("driver", "generate_trip", { trip_id: newTripId, from: fromLockerId, to: toLockerId })
+const fetchUsers = async () => {
+  setIsLoadingUsers(true);
+  try {
+    const response = await fetch('/api/proxy/users');
+    if (!response.ok) throw new Error('Failed to fetch users');
+    const data = await response.json();
+    setUsers(data);
+  } catch (error) {
+    console.error('Error fetching users:', error);
+  } finally {
+    setIsLoadingUsers(false);
   }
+};
 
   const handleStartTrip = async (tripId: number) => {
     const data = {
@@ -937,56 +933,6 @@ async function enqueueOrder(data: FsmEnqueueRequest) {
   }
 };
 
-
-  const handleCancelClientOrder = async (orderId: number) => {
-  const data = {
-    entity_type: "order",
-    entity_id: orderId,
-    process_name: "cancel_order",
-    user_id: parseInt(selectedClientId),
-  };
-
-  try {
-    const response = await fetch('/api/proxy/fsm/enqueue', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(data),
-    });
-    if (response.status === 404) {
-      console.log(`[CANCEL ORDER] Order ${orderId} cannot be cancelled (404)`);
-      setClientOrders(prev =>
-        prev.map(order =>
-          order.id === orderId ? { ...order, status: "cannot_cancel", canCancel: false } : order
-        )
-      );
-      return;
-    }
-
-    const result = await response.json();
-
-    if (result.error || result.status === 'error' || result.message?.includes('cannot')) {
-      setClientOrders(
-        clientOrders.map((order) => (order.id === orderId ? { ...order, status: "cannot_cancel", canCancel: false } : order)),
-      );
-      console.error('Order cannot be cancelled:', result.message || 'Unknown error');
-      return;
-    }
-
-    // Локально удаляем заказ из списка
-    setClientOrders(
-      clientOrders.filter((order) => order.id !== orderId)
-    );
-
-    handleAction("client", "cancel_order", result);
-    await loadClientOrders();
-  } catch (error) {
-    console.error('Error cancelling order:', error);
-  }
-};
-
-
   const handleCancelCourierOrder = async (orderId: number) => {
     setCourierMessage(null); // Сбрасываем предыдущее сообщение
     const data = {
@@ -1084,9 +1030,6 @@ async function enqueueOrder(data: FsmEnqueueRequest) {
     return []; // Возвращаем пустой массив в случае ошибки
   }
 };
-
-
-
 
   const calculateWaitingTime = (createdDate: Date) => {
     const now = new Date()
@@ -1456,185 +1399,30 @@ async function enqueueOrder(data: FsmEnqueueRequest) {
 
         <div className="flex-1 overflow-auto p-4">
           <TabsContent value="client" className="mt-0">
-            <Card>
-              <CardHeader>
-                <CardTitle>{t.client.title}</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                {mode === "create" && (
-                  <div>
-                    <Label htmlFor="client-user-id">{t.client.userId}</Label>
-                    <Select value={selectedClientId} onValueChange={setSelectedClientId}>
-                      <SelectTrigger id="client-user-id">
-                        <SelectValue placeholder={t.client.selectUserId} />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {[1001, 1002, 1003, 1004, 1005].map((id) => (
-                          <SelectItem key={id} value={id.toString()}>
-                            {language === "ru" ? "Клиент" : "Client"} #{id}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                )}
-
-                <div>
-  <Label htmlFor="recipient-user-id">{t.client.recipientUserId || "ID получателя"}</Label>
-  <Input
-    id="recipient-user-id"
-    type="text"
-    placeholder="Введите ID получателя"
-    value={recipientUserId}
-    onChange={(e) => setRecipientUserId(e.target.value)}
+  <ClientForm
+    selectedClientId={selectedClientId}
+    setSelectedClientId={setSelectedClientId}
+    recipientUserId={recipientUserId}
+    setRecipientUserId={setRecipientUserId}
+    parcelType={parcelType}
+    setParcelType={setParcelType}
+    cellSize={cellSize}
+    setCellSize={setCellSize}
+    senderDelivery={senderDelivery}
+    setSenderDelivery={setSenderDelivery}
+    recipientDelivery={recipientDelivery}
+    setRecipientDelivery={setRecipientDelivery}
+    clientOrders={clientOrders}
+    setClientOrders={setClientOrders}
+    orderMessage={orderMessage}
+    setOrderMessage={setOrderMessage}
+    language={language}
+    t={t}
+    addLog={addLog}
+    users={users.filter((user) => user.role_name === "recipient" || user.role_name === "client")}
   />
-</div>
+</TabsContent>
 
-
-                {orderMessage && (
-                  <div>
-                    <Badge variant="default" className={orderMessage.includes('успешно') ? 'bg-green-600' : 'bg-red-600'}>
-                      {orderMessage}
-                    </Badge>
-                  </div>
-                )}
-
-                <div className="grid gap-4">
-                  <div>
-                    <Label htmlFor="parcel-type">{t.client.parcelType}</Label>
-                    <Select value={parcelType} onValueChange={setParcelType}>
-                      <SelectTrigger id="parcel-type">
-                        <SelectValue placeholder={t.client.selectParcelType} />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="parcel">{t.client.parcel}</SelectItem>
-                        <SelectItem value="letter">{t.client.letter}</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <div>
-                    <Label htmlFor="cell-size">{t.client.cellSize}</Label>
-                    <Select value={cellSize} onValueChange={setCellSize} disabled={parcelType === "letter"}>
-                      <SelectTrigger id="cell-size">
-                        <SelectValue placeholder={t.client.selectCellSize} />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="S">S</SelectItem>
-                        <SelectItem value="M">M</SelectItem>
-                        <SelectItem value="L">L</SelectItem>
-                        <SelectItem value="P">P (Letter)</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <div>
-                    <Label htmlFor="sender-delivery">{t.client.senderDelivery}</Label>
-                    <Select value={senderDelivery} onValueChange={setSenderDelivery}>
-                      <SelectTrigger id="sender-delivery">
-                        <SelectValue placeholder={t.client.selectDeliveryType} />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="courier">{t.client.courier}</SelectItem>
-                        <SelectItem value="self">{t.client.selfService}</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <div>
-                    <Label htmlFor="recipient-delivery">{t.client.recipientDelivery}</Label>
-                    <Select value={recipientDelivery} onValueChange={setRecipientDelivery}>
-                      <SelectTrigger id="recipient-delivery">
-                        <SelectValue placeholder={t.client.selectDeliveryType} />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="courier">{t.client.courier}</SelectItem>
-                        <SelectItem value="self">{t.client.selfService}</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-
-                <div className="flex gap-2 flex-wrap">
-                  <Button
-                    onClick={handleCreateOrder}
-                    disabled={!parcelType || !cellSize || !senderDelivery || !recipientDelivery || !recipientUserId}
-                    className={highlightedAction === "create_order" ? "animate-pulse" : ""}
-                  >
-                    {t.client.createOrder}
-                  </Button>
-                </div>
-
-                {clientOrders.length > 0 && (
-                  <div className="mt-6">
-                    <h3 className="font-semibold mb-3">{t.client.myOrders}</h3>
-                    <div className="border rounded-lg overflow-x-auto">
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead>{t.client.orderId}</TableHead>
-                            <TableHead>{t.client.description}</TableHead>
-                            <TableHead>{t.client.status}</TableHead>
-                            <TableHead></TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {clientOrders.map((order) => (
-                            <TableRow key={order.correlationId || order.id}>  {/* ИЗМЕНЕНО - используем correlationId как ключ */}
-                              <TableCell>
-                                {order.isLoading ? (  // ДОБАВЛЕНО - индикатор загрузки
-                                  <div className="flex items-center gap-2">
-                                    <div className="h-4 w-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-                                    <span className="text-sm text-muted-foreground">
-                                      {language === "ru" ? "Создание..." : "Creating..."}
-                                    </span>
-                                  </div>
-                                ) : (
-                                  order.id
-                                )}
-                              </TableCell>
-                              <TableCell>
-                                {order.isLoading ? (  // ДОБАВЛЕНО - заглушка для описания
-                                  <div className="h-4 w-32 bg-muted animate-pulse rounded" />
-                                ) : (
-                                  order.description
-                                )}
-                              </TableCell>
-                              <TableCell>
-                                {order.isLoading ? (  // ДОБАВЛЕНО - заглушка для статуса
-                                  <div className="h-5 w-24 bg-muted animate-pulse rounded-full" />
-                                ) : (
-                                  <Badge variant={order.status === "cancelled" ? "destructive" : order.status === "processing" ? "secondary" : "default"}>
-                                    {order.status === "processing" ? t.client.statusProcessing : order.status}
-                                  </Badge>
-                                )}
-                              </TableCell>
-                              <TableCell>
-                                {!order.isLoading && (  // ДОБАВЛЕНО - скрываем кнопки во время загрузки
-                                  order.canCancel ? (
-                                    <Button
-                                      size="sm"
-                                      variant="destructive"
-                                      onClick={() => handleCancelClientOrder(order.id)}
-                                      className={highlightedAction === "cancel_order" ? "animate-pulse" : ""}
-                                    >
-                                      {t.client.cancelOrder}
-                                    </Button>
-                                  ) : (
-                                    <span className="text-xs text-muted-foreground">{t.client.cannotCancel}</span>
-                                  )
-                                )}
-                              </TableCell>
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
-                    </div>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </TabsContent>
 
           <TabsContent value="recipient" className="mt-0">
             <Card>
