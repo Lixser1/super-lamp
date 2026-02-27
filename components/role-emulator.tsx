@@ -25,8 +25,7 @@ import {
 } from "@/lib/mock-data"
 import { ClientForm } from "./client-form"
 import { CourierForm } from "./courier-form";
-import { log } from "console"
-
+import { DriverForm } from "./driver-form"
 interface RoleEmulatorProps {
   addLog: (log: any) => void
   currentTest: any
@@ -35,11 +34,13 @@ interface RoleEmulatorProps {
 }
 
 interface FsmEnqueueRequest {
-  entity_type: "order";
+  entity_type: "order" | "trip";
   entity_id: number;
   process_name: string;
   user_id: number;
   target_user_id: number;
+  target_role?: string;
+  metadata?: any;
 }
 
 interface User {
@@ -600,11 +601,13 @@ async function enqueueOrder(data: FsmEnqueueRequest) {
 
   const handleTakeDriverOrder = async (orderId: number) => {
   const requestData: FsmEnqueueRequest = {
-    entity_type: "order",
+    entity_type: "trip",
     entity_id: orderId,
-    process_name: "trip_assign_driver", // Специфичный процесс для водителя
+    process_name: "trip_assign_driver",
     user_id: parseInt(selectedDriverId),
-    target_user_id: parseInt(selectedDriverId), // Оба ID совпадают
+    target_user_id: parseInt(selectedDriverId),
+    target_role: "driver",
+    metadata: {}
   };
 
   try {
@@ -850,7 +853,6 @@ const fetchUsers = async () => {
       setCourierMessage('Ошибка при отмене заказа');
     }
   }
-// Фильтрация заказов на основе текущего ordersFilter
 const filteredAvailableOrders = availableOrders.filter((o: any) => {
   if (ordersFilter === "in") {
     return o.type === "pickup" || o.type === "delivery" && o.status === "order_created";
@@ -1370,443 +1372,57 @@ const filteredAvailableOrders = availableOrders.filter((o: any) => {
 
 
           <TabsContent value="driver" className="mt-0">
-            <Card>
-              <CardHeader>
-                <CardTitle>{t.driver.title}</CardTitle>
-              </CardHeader>
-              <div className="mb-4">
-  <Label htmlFor="city-select">{language === "ru" ? "Город" : "City"}</Label>
-  <Select value={selectedCity} onValueChange={setSelectedCity}>
-    <SelectTrigger id="city-select" className="w-[180px]">
-      <SelectValue placeholder={language === "ru" ? "Выберите город" : "Select city"} />
-    </SelectTrigger>
-    <SelectContent>
-      <SelectItem value="МСК">МСК</SelectItem>
-      <SelectItem value="СПБ">СПБ</SelectItem>
-    </SelectContent>
-  </Select>
-</div>
-
-              <CardContent className="space-y-6">
-                {mode === "create" && (
-                  <div>
-                    <Label htmlFor="driver-id">{t.driver.driverId}</Label>
-                    <Select value={selectedDriverId} onValueChange={setSelectedDriverId}>
-                      <SelectTrigger id="driver-id">
-                        <SelectValue placeholder={t.driver.selectDriverId} />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {users.filter((user) => user.role_name === "driver").map((user) => (
-                          <SelectItem key={user.id} value={user.id.toString()}>
-                            {language === "ru" ? "Водитель" : "Driver"} #{user.id}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                )}
-
-                <div>
-  <div className="flex items-center justify-between mb-3">
-    <h3 className="font-semibold">{t.driver.tripExchange}</h3>
-  </div>
-  <div className="border rounded-lg overflow-hidden">
-                    <Table>
-  <TableHeader>
-    <TableRow>
-      <TableHead>ID</TableHead>
-      <TableHead>{language === "ru" ? "Откуда" : "From"}</TableHead>
-      <TableHead>{language === "ru" ? "Куда" : "To"}</TableHead>
-      <TableHead></TableHead>
-    </TableRow>
-  </TableHeader>
-  <TableBody>
-    {driverAvailableOrders.map((order) => (
-      <TableRow key={order.id}>
-        <TableCell>{order.id}</TableCell>
-        <TableCell>{order.from_city}</TableCell>
-        <TableCell>{order.to_city}</TableCell>
-        <TableCell>
-          <Button size="sm" onClick={() => handleTakeDriverOrder(order.id)}>
-            {t.driver.takeOrder}
-          </Button>
-        </TableCell>
-      </TableRow>
-    ))}
-  </TableBody>
-</Table>
-
-
-                  </div>
-                </div>
-
-                <div>
-                  <div className="flex items-center justify-between mb-3">
-  <h3 className="font-semibold">{t.driver.tripFeed}</h3>
-  <div className="flex gap-2">
-                      <Button
-                        size="sm"
-                        variant={tripFeedFilter === "all" ? "default" : "outline"}
-                        onClick={() => setTripFeedFilter("all")}
-                      >
-                        {t.driver.all}
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant={tripFeedFilter === "active" ? "default" : "outline"}
-                        onClick={() => setTripFeedFilter("active")}
-                      >
-                        {t.driver.active}
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant={tripFeedFilter === "archive" ? "default" : "outline"}
-                        onClick={() => setTripFeedFilter("archive")}
-                      >
-                        {t.driver.archive}
-                      </Button>
-                    </div>
-                  </div>
-                  <div className="border rounded-lg overflow-hidden">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>{t.driver.tripId}</TableHead>
-                          <TableHead>{t.driver.status}</TableHead>
-                          <TableHead>{t.driver.tripStatus}</TableHead>
-                          <TableHead></TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {driverAssignedOrders
-                          .filter((order) => {
-                            if (tripFeedFilter === "active") {
-                              return order.tripStatus !== "completed"
-                            } else if (tripFeedFilter === "archive") {
-                              return order.tripStatus === "completed"
-                            }
-                            return true
-                          })
-                          .map((order) => (
-                            <TableRow key={order.id}>
-                              <TableCell>{order.tripId}</TableCell>
-                              <TableCell>
-                                <Badge
-                                  variant={order.status === "taken_from_exchange_driver" ? "default" : "secondary"}
-                                >
-                                  {order.status === "taken_from_exchange_driver"
-                                    ? language === "ru"
-                                      ? "Взят с биржи"
-                                      : "Taken from exchange"
-                                    : language === "ru"
-                                      ? "Назначен оператором"
-                                      : "Assigned by operator"}
-                                </Badge>
-                              </TableCell>
-                              <TableCell>
-                                <Badge variant="outline">
-                                  {order.tripStatus === "at_from_locker"
-                                    ? t.driver.atLockerFrom
-                                    : order.tripStatus === "in_transit"
-                                      ? t.driver.inTransit
-                                      : order.tripStatus === "at_to_locker"
-                                        ? t.driver.atLockerTo
-                                        : language === "ru"
-                                          ? "Завершен"
-                                          : "Completed"}
-                                </Badge>
-                              </TableCell>
-                              <TableCell className="space-x-2">
-                                {order.tripStatus === "in_transit" ? (
-                                  <Button
-                                    size="sm"
-                                    onClick={() => {
-                                      setActiveTripId(order.tripId)
-                                      setTripId(order.tripId)
-                                      handleChangeTripState("at_to_locker")
-                                    }}
-                                  >
-                                    {t.driver.arrived}
-                                  </Button>
-                                ) : order.tripStatus !== "completed" && order.tripStatus !== "at_to_locker" ? (
-                                  <Button
-                                    size="sm"
-                                    onClick={() => handleStartTrip(order.tripId)}
-                                    disabled={hasActiveTrip}
-                                  >
-                                    {t.driver.startTrip}
-                                  </Button>
-                                ) : null}
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  onClick={() => handleCancelDriverOrder(order.id)}
-                                  disabled={order.tripStatus === "completed"}
-                                >
-                                  {t.driver.cancelOrder}
-                                </Button>
-                              </TableCell>
-                            </TableRow>
-                          ))}
-                      </TableBody>
-                    </Table>
-                  </div>
-                </div>
-
-                {tripId && (
-                  <div className="border-t pt-6">
-                    <h3 className="font-semibold mb-4">{t.driver.activeTrip}</h3>
-                    <div className="space-y-4">
-                      <div className="flex items-center gap-3">
-                        <Badge variant="default" className="bg-blue-600">
-                          {t.driver.tripId}: {tripId}
-                        </Badge>
-                        <Badge variant="outline" className="text-base px-3 py-1">
-                          {tripState === "at_from_locker"
-                            ? t.driver.atLockerFrom
-                            : tripState === "in_transit"
-                              ? t.driver.inTransit
-                              : t.driver.atLockerTo}
-                        </Badge>
-                      </div>
-
-                      <div>
-                        <h3 className="font-semibold mb-3">{t.driver.directOrders}</h3>
-                        <div className="border rounded-lg overflow-hidden">
-                          <Table>
-                            <TableHeader>
-                              <TableRow>
-                                <TableHead className="w-12"></TableHead>
-                                <TableHead>{t.driver.orderId}</TableHead>
-                                <TableHead>{t.driver.cellFrom}</TableHead>
-                              </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                              {directOrders.map((order) => {
-                                const isTaken = takenDirectOrders.includes(order.id)
-                                const canCheck = tripState === "at_from_locker" && !isTaken
-                                return (
-                                  <TableRow key={order.id}>
-                                    <TableCell>
-                                      <Checkbox
-                                        checked={selectedDirectOrders.includes(order.id) || isTaken}
-                                        disabled={!canCheck}
-                                        onCheckedChange={(checked) => {
-                                          if (checked) {
-                                            setSelectedDirectOrders([...selectedDirectOrders, order.id])
-                                          } else {
-                                            setSelectedDirectOrders(
-                                              selectedDirectOrders.filter((id) => id !== order.id),
-                                            )
-                                          }
-                                        }}
-                                      />
-                                    </TableCell>
-                                    <TableCell>{order.id}</TableCell>
-                                    <TableCell>
-                                      {order.cell}
-                                      {isTaken && (
-                                        <Badge variant="secondary" className="ml-2">
-                                          {language === "ru" ? "Взят" : "Taken"}
-                                        </Badge>
-                                      )}
-                                    </TableCell>
-                                  </TableRow>
-                                )
-                              })}
-                            </TableBody>
-                          </Table>
-                        </div>
-                        <div className="flex gap-2 mt-3">
-                          {tripState === "at_from_locker" && (
-                            <Button
-                              size="sm"
-                              onClick={handleTakeSelectedOrders}
-                              disabled={selectedDirectOrders.length === 0}
-                              className={highlightedAction === "take_orders" ? "animate-pulse" : ""}
-                            >
-                              {t.driver.takeSelected}
-                            </Button>
-                          )}
-                          {tripState === "in_transit" && (
-                            <Button
-                              size="sm"
-                              onClick={() => handleChangeTripState("at_to_locker")}
-                              className={highlightedAction === "arrive_at_locker" ? "animate-pulse" : ""}
-                            >
-                              {t.driver.arrived}
-                            </Button>
-                          )}
-                        </div>
-                      </div>
-
-                      {tripState === "at_to_locker" ? (
-                        <React.Fragment>
-                          <div>
-                            <h3 className="font-semibold mb-3">{t.driver.reverseOrders}</h3>
-                            <div className="border rounded-lg overflow-hidden">
-                              <Table>
-                                <TableHeader>
-                                  <TableRow>
-                                    <TableHead className="w-12"></TableHead>
-                                    <TableHead>{t.driver.orderId}</TableHead>
-                                    <TableHead>{t.driver.cellFrom}</TableHead>
-                                  </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                  {reverseOrders.map((order) => {
-                                    const isTaken = takenReverseOrders.includes(order.id)
-                                    const canCheck = !isTaken
-                                    return (
-                                      <TableRow key={order.id}>
-                                        <TableCell>
-                                          <Checkbox
-                                            checked={selectedReverseOrders.includes(order.id) || isTaken}
-                                            disabled={!canCheck}
-                                            onCheckedChange={(checked) => {
-                                              if (checked) {
-                                                setSelectedReverseOrders([...selectedReverseOrders, order.id])
-                                              } else {
-                                                setSelectedReverseOrders(
-                                                  selectedReverseOrders.filter((id) => id !== order.id),
-                                                )
-                                              }
-                                            }}
-                                          />
-                                        </TableCell>
-                                        <TableCell>{order.id}</TableCell>
-                                        <TableCell>
-                                          {order.cell}
-                                          {isTaken && (
-                                            <Badge variant="secondary" className="ml-2">
-                                              {language === "ru" ? "Взят" : "Taken"}
-                                            </Badge>
-                                          )}
-                                        </TableCell>
-                                      </TableRow>
-                                    )
-                                  })}
-                                </TableBody>
-                              </Table>
-                            </div>
-                          </div>
-                          <div className="mt-6">
-                            <div className="flex items-center justify-between mb-3">
-                              <h3 className="font-semibold">{t.driver.freeCells}</h3>
-                              <Button size="sm" variant="outline" onClick={() => setShowPlacedOrders(!showPlacedOrders)}>
-                                {t.driver.showPlacedOrders}
-                              </Button>
-                            </div>
-
-
-                          {showPlacedOrders ? (
-                            <div className="border rounded-lg overflow-hidden">
-                              <Table>
-                                <TableHeader>
-                                  <TableRow>
-                                    <TableHead>{t.driver.cell}</TableHead>
-                                    <TableHead>{t.driver.size}</TableHead>
-                                    <TableHead>{t.driver.orderId}</TableHead>
-                                  </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                  {Object.entries(placedParcels).map(([cellNumber, parcel]) => (
-                                    <TableRow key={cellNumber}>
-                                      <TableCell>{cellNumber}</TableCell>
-                                      <TableCell>{parcel.originalSize}</TableCell>
-                                      <TableCell>
-                                        <Badge variant="default">#{parcel.orderId}</Badge>
-                                      </TableCell>
-                                    </TableRow>
-                                  ))}
-                                </TableBody>
-                              </Table>
-                            </div>
-                          ) : (
-                            <div className="border rounded-lg overflow-hidden">
-                              <Table>
-                                <TableHeader>
-                                  <TableRow>
-                                    <TableHead>{t.driver.cell}</TableHead>
-                                    <TableHead>{t.driver.size}</TableHead>
-                                    <TableHead>
-                                      {t.driver.orderId} / {t.driver.placeInCell}
-                                    </TableHead>
-                                  </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                  {freeCells.map((cell) => {
-                                    const sizeOrder = { P: 1, S: 2, M: 3, L: 4 }
-                                    const cellSizeValue = sizeOrder[cell.size as keyof typeof sizeOrder] || 0
-
-                                    const availableOrders = [...takenDirectOrders, ...takenReverseOrders]
-                                      .map((orderId) => {
-                                        const order = [...directOrders, ...reverseOrders].find((o) => o.id === orderId)
-                                        return order
-                                      })
-                                      .filter((order) => {
-                                        if (!order) return false
-                                        const orderSize = sizeOrder[order.size as keyof typeof sizeOrder] || 0
-                                        // Only show orders of the same size as the cell
-                                        return orderSize <= cellSizeValue && order.size === cell.size
-                                      })
-
-                                    return (
-                                      <TableRow key={cell.number}>
-                                        <TableCell>{cell.number}</TableCell>
-                                        <TableCell>{cell.size}</TableCell>
-                                        <TableCell>
-                                          {placedParcels[cell.number] ? (
-                                            <Badge variant="default">#{placedParcels[cell.number].orderId}</Badge>
-                                          ) : availableOrders.length > 0 ? (
-                                            <Select
-                                              onValueChange={(orderId) =>
-                                                handlePlaceParcelInCell(Number.parseInt(orderId), cell.number)
-                                              }
-                                            >
-                                              <SelectTrigger className="w-40">
-                                                <SelectValue placeholder={t.driver.placeInCell} />
-                                              </SelectTrigger>
-                                              <SelectContent>
-                                                {availableOrders.map((order) => (
-                                                  <SelectItem key={order!.id} value={order!.id.toString()}>
-                                                    {language === "ru" ? "Заказ" : "Order"} #{order!.id}
-                                                  </SelectItem>
-                                                ))}
-                                              </SelectContent>
-                                            </Select>
-                                          ) : (
-                                            <span className="text-xs text-muted-foreground">
-                                              {language === "ru" ? "Нет заказов" : "No orders"}
-                                            </span>
-                                          )}
-                                        </TableCell>
-                                      </TableRow>
-                                    )
-                                  })}
-                                </TableBody>
-                              </Table>
-                            </div>
-                          )}
-                          <div className="flex gap-2 mt-3">
-                            {takenDirectOrders.length === 0 &&
-                              takenReverseOrders.length === 0 &&
-                              Object.keys(placedParcels).length > 0 && (
-                                <Button
-                                  onClick={handleCloseOrder}
-                                  className={highlightedAction === "close_order" ? "animate-pulse" : ""}
-                                >
-                                  {t.driver.closeOrder}
-                                </Button>
-                              )}
-                          </div>
-                        </div>
-                      </React.Fragment> ) : null}
-                    </div>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
+  <DriverForm
+    selectedDriverId={selectedDriverId}
+    setSelectedDriverId={setSelectedDriverId}
+    selectedCity={selectedCity}
+    setSelectedCity={setSelectedCity}
+    driverAvailableOrders={driverAvailableOrders}
+    driverAssignedOrders={driverAssignedOrders}
+    tripFeedFilter={tripFeedFilter}
+    setTripFeedFilter={setTripFeedFilter}
+    tripState={tripState}
+    setTripState={setTripState}
+    activeTripId={activeTripId}
+    setActiveTripId={setActiveTripId}
+    tripId={tripId}
+    setTripId={setTripId}
+    hasActiveTrip={hasActiveTrip}
+    setHasActiveTrip={setHasActiveTrip}
+    lockerFrom={lockerFrom}
+    setLockerFrom={setLockerFrom}
+    lockerTo={lockerTo}
+    setLockerTo={setLockerTo}
+    directOrders={directOrders}
+    setDirectOrders={setDirectOrders}
+    reverseOrders={reverseOrders}
+    setReverseOrders={setReverseOrders}
+    freeCells={freeCells}
+    setFreeCells={setFreeCells}
+    selectedDirectOrders={selectedDirectOrders}
+    setSelectedDirectOrders={setSelectedDirectOrders}
+    selectedReverseOrders={selectedReverseOrders}
+    setSelectedReverseOrders={setSelectedReverseOrders}
+    takenDirectOrders={takenDirectOrders}
+    setTakenDirectOrders={setTakenDirectOrders}
+    takenReverseOrders={takenReverseOrders}
+    setTakenReverseOrders={setTakenReverseOrders}
+    placedParcels={placedParcels}
+    setPlacedParcels={setPlacedParcels}
+    showPlacedOrders={showPlacedOrders}
+    setShowPlacedOrders={setShowPlacedOrders}
+    mode={mode}
+    t={t}
+    language={language}
+    users={users}
+    handleTakeDriverOrder={handleTakeDriverOrder}
+    handleCancelDriverOrder={handleCancelDriverOrder}
+    handleStartTrip={handleStartTrip}
+    handleChangeTripState={handleChangeTripState}
+    handleTakeSelectedOrders={handleTakeSelectedOrders}
+    handlePlaceParcelInCell={handlePlaceParcelInCell}
+    handleCloseOrder={handleCloseOrder}
+  />
           </TabsContent>
 
           <TabsContent value="operator" className="mt-0">
