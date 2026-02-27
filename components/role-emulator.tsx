@@ -23,8 +23,9 @@ import {
   mockDriverAssignedOrders,
   mockLockerCells,
 } from "@/lib/mock-data"
-import { v4 as uuidv4 } from 'uuid';
 import { ClientForm } from "./client-form"
+import { CourierForm } from "./courier-form";
+import { log } from "console"
 
 interface RoleEmulatorProps {
   addLog: (log: any) => void
@@ -49,8 +50,6 @@ interface User {
   phone: string | null;
 }
 
-
-
 export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }: RoleEmulatorProps) {
   const [mode, setMode] = useState<"create" | "run">("create")
   const [selectedClientId, setSelectedClientId] = useState<string>("1001")
@@ -62,10 +61,6 @@ export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }:
   const [selectedCity, setSelectedCity] = useState<string>("МСК");
 const [users, setUsers] = useState<User[]>([]);
 const [isLoadingUsers, setIsLoadingUsers] = useState(false);
-
-
-
-
   const [clientOrders, setClientOrders] = useState<
     Array<{
       id: number
@@ -76,21 +71,12 @@ const [isLoadingUsers, setIsLoadingUsers] = useState(false);
       isLoading?: boolean
     }>
   >([])
-
   const [orderMessage, setOrderMessage] = useState<string | null>(null)
   const [courierMessage, setCourierMessage] = useState<string | null>(null)
   const [parcelType, setParcelType] = useState("")
   const [cellSize, setCellSize] = useState("")
   const [senderDelivery, setSenderDelivery] = useState("")
   const [recipientDelivery, setRecipientDelivery] = useState("")
-
-
-
-  const [recipientOrderInfo, setRecipientOrderInfo] = useState<{
-    orderId: number
-    locker: string
-    cell: string
-  } | null>(null)
 
   const [availableOrders, setAvailableOrders] = useState<any[]>([])
   const [assignedOrders, setAssignedOrders] = useState<any[]>([])
@@ -153,10 +139,8 @@ const [pollingInterval, setPollingInterval] = useState(20000)
 const [lastFetchTime, setLastFetchTime] = useState<{ [key: string]: number }>({})
 
   const courierIntervalRef = useRef<NodeJS.Timeout | null>(null)
-  const driverIntervalRef = useRef<NodeJS.Timeout | null>(null)
   const clientIntervalRef = useRef<NodeJS.Timeout | null>(null)
   
-
 useEffect(() => {
   fetchUsers();
 }, []);
@@ -200,7 +184,6 @@ useEffect(() => {
   }
 }, [selectedClientId]);
 
-
 useEffect(() => {
   if (!isTabActive || !selectedClientId) return;
 
@@ -213,7 +196,6 @@ useEffect(() => {
     if (clientIntervalRef.current) clearInterval(clientIntervalRef.current);
   };
 }, [selectedClientId, isTabActive, pollingInterval, lastFetchTime]);
-
 
 // ========== УМНЫЙ POLLING ДЛЯ КЛИЕНТА ==========
 useEffect(() => {
@@ -353,7 +335,6 @@ useEffect(() => {
   refreshDriverOrders();
 }, [selectedCity, isTabActive]);
 
-
   const handleAction = (role: string, action: string, extraData?: any) => {
     console.log(`[API] POST /${role}/${action}`, extraData || {})
     addLog({
@@ -384,20 +365,6 @@ const fetchAllOrders = async () => {
     return mockOrders; // Возвращаем мок-данные только в случае ошибки
   }
 };
-
-
-
-
-const fetchOrderById = async (orderId: number) => {
-  try {
-    const response = await fetch(`/api/proxy/orders/${orderId}`)
-    if (!response.ok) throw new Error('Failed to fetch order')
-    return await response.json()
-  } catch (error) {
-    console.error('Error fetching order:', error)
-    return null
-  }
-}
 
 const fetchClientOrdersByUserId = async (userId: string) => {
   try {
@@ -466,9 +433,6 @@ const loadClientOrders = async () => {
   }
 };
 
-
-
-
 const refreshCourierOrders = async () => {
   if (isRefreshingCourier) return;
   setIsRefreshingCourier(true);
@@ -476,45 +440,12 @@ const refreshCourierOrders = async () => {
 
   try {
     const response = await fetchAllOrders();
-    console.log("Fetched courier exchange data:", response);
-
     const allOrders = response.orders || [];
 
-    // Фильтруем заказы в зависимости от активного фильтра
-    let available = [];
-    if (ordersFilter === "in") {
-      available = allOrders.filter(
-        (o: any) => o.type === 'pickup' && o.status === 'order_created'
-      );
-    } else if (ordersFilter === "out") {
-      available = allOrders.filter(
-        (o: any) => o.type === 'pickup' && o.status === 'order_parcel_confirmed_post2'
-      );
-    }
+    // Сохраняем ВСЕ заказы без фильтрации
+    setAvailableOrders(allOrders);
 
-    // Заказы, которые уже назначены курьеру
-    const assigned = allOrders.filter(
-      (o: any) =>
-        o.type === 'pickup' &&
-        !['order_created', 'order_completed'].includes(o.status)
-    );
-
-    // Обогащаем данные, если нужно
-    const enrichIfNeeded = (orders: any[]) => {
-      if (orders.length === 0) return [];
-      return orders.map((o: any) => ({
-        ...o,
-        id: o.id,
-        status: o.status,
-        lockerId: 1, // Используем фиксированное значение, если нет locker_id
-        cell: o.source_cell_code || 'N/A',
-        size: o.cell_size || 'S',
-      }));
-    };
-
-    setAvailableOrders(enrichIfNeeded(available));
-    setAssignedOrders(enrichIfNeeded(assigned));
-
+    // Логика для динамического изменения интервала опроса
     const duration = Date.now() - startTime;
     if (duration > 3000) {
       setPollingInterval(prev => Math.min(prev * 1.5, 60000));
@@ -529,6 +460,7 @@ const refreshCourierOrders = async () => {
   }
 };
 
+
 const refreshDriverOrders = async () => {
   if (isRefreshingDriver) return;
   setIsRefreshingDriver(true);
@@ -542,61 +474,6 @@ const refreshDriverOrders = async () => {
     console.error("Error refreshing driver orders:", error);
   } finally {
     setIsRefreshingDriver(false);
-  }
-};
-
-  const handleCreateOrder = async () => {
-  setOrderMessage(null); // Сбрасываем предыдущее сообщение
-  const correlationId = uuidv4();
-  const tempOrderId = Math.floor(Math.random() * 10000) + 1000; // Временный ID для отображения на фронте
-
-  const data = {
-    client_user_id: parseInt(selectedClientId),
-    parcel_type: parcelType,
-    cell_size: cellSize,
-    sender_delivery: senderDelivery,
-    recipient_delivery: recipientDelivery,
-    correlation_id: correlationId,
-    recipient_user_id: recipientUserId,
-  };
-
-  try {
-    // Отправляем запрос на создание заказа
-    const response = await fetch('/api/proxy/client/create_order_request', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(data),
-    });
-
-    const result = await response.json();
-
-    // Устанавливаем сообщение из ответа
-    setOrderMessage(result.message || 'Неизвестная ошибка');
-
-    if (result.success) {
-      // Добавляем заказ в список клиента с временным ID и correlationId
-      setClientOrders([
-        ...clientOrders,
-        {
-          id: tempOrderId, // Временный ID
-          description: `${parcelType} to cell ${cellSize}`,
-          status: "processing",
-          canCancel: false,
-          correlationId: correlationId,
-          isLoading: true,
-        },
-      ]);
-
-      // Заказ появится автоматически через polling loadClientOrders
-    } else {
-      // Если заказ не создан, не добавляем в список
-      console.log('Order creation failed:', result.message);
-    }
-  } catch (error) {
-    console.error('Error creating order:', error);
-    setOrderMessage('Ошибка при создании заказа');
   }
 };
 
@@ -973,6 +850,17 @@ const fetchUsers = async () => {
       setCourierMessage('Ошибка при отмене заказа');
     }
   }
+// Фильтрация заказов на основе текущего ordersFilter
+const filteredAvailableOrders = availableOrders.filter((o: any) => {
+  if (ordersFilter === "in") {
+    return o.type === "pickup" || o.type === "delivery" && o.status === "order_created";
+  } else if (ordersFilter === "out") {
+    return o.type === "delivery" && o.status === "order_parcel_confirmed_post2";
+    
+  }
+  return false;
+});
+
 
   const toggleLocker = (lockerId: number) => {
     if (expandedLockers.includes(lockerId)) {
@@ -1023,11 +911,11 @@ const fetchUsers = async () => {
     const response = await fetch(`/api/proxy/driver/exchange?city=${cityParam}`);
     if (!response.ok) throw new Error("Failed to fetch orders");
     const data = await response.json();
-    console.log("Fetched orders:", data); // Проверьте, что данные приходят
+    console.log("Fetched orders:", data);
     return data; // Возвращаем весь ответ, если структура: { orders: [...] }
   } catch (error) {
     console.error("Error fetching driver exchange orders:", error);
-    return []; // Возвращаем пустой массив в случае ошибки
+    return [];
   }
 };
 
@@ -1124,134 +1012,6 @@ const fetchUsers = async () => {
     return assignedOrders.filter((order) => order.status === "locker_closed" || order.status === "order_cancelled")
   }
 }, [assignedOrders, courierOrdersFilter])
-
-
-
-  const renderCourierActionButtons = (order: any) => {
-    const canCancel = !["parcel_placed", "waiting_for_close", "locker_closed"].includes(order.status)
-
-    return (
-      <div className="flex flex-col gap-2">
-        <div className="flex gap-2">
-          {/* Primary action button based on status */}
-          {["taken_by_courier", "taken_from_exchange", "assigned_by_operator"].includes(order.status) && (
-            <Button size="sm" onClick={() => handleCourierDeliveryAction(order.id, "get_code")}>
-              {t.courier.getLockerCode}
-            </Button>
-          )}
-          {order.status === "waiting_for_code" && (
-            <Button size="sm" onClick={() => handleCourierDeliveryAction(order.id, "code_received")}>
-              {t.courier.codeReceived}
-            </Button>
-          )}
-          {order.status === "code_received" && (
-            <Button size="sm" onClick={() => handleCourierDeliveryAction(order.id, "open_locker")}>
-              {t.courier.enterCodeOpenLocker}
-            </Button>
-          )}
-          {order.status === "waiting_for_code_retry" && (
-            <>
-              <Button size="sm" onClick={() => handleCourierDeliveryAction(order.id, "code_received_retry")}>
-                {t.courier.codeReceived}
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => handleCourierDeliveryAction(order.id, "request_code_again")}
-              >
-                {t.courier.requestCodeAgain}
-              </Button>
-            </>
-          )}
-          {order.status === "locker_opened" && (
-            <Button size="sm" onClick={() => handleCourierDeliveryAction(order.id, "confirm_placed")}>
-              {t.courier.confirmParcelPlaced}
-            </Button>
-          )}
-          {order.status === "parcel_placed" && (
-            <Button size="sm" onClick={() => handleCourierDeliveryAction(order.id, "close_locker")}>
-              {t.courier.closeLocker}
-            </Button>
-          )}
-          {order.status === "waiting_for_close" && (
-            <Button size="sm" onClick={() => handleCourierDeliveryAction(order.id, "finish_delivery")}>
-              {t.courier.finishDelivery}
-            </Button>
-          )}
-          {order.status === "locker_closed" && (
-            <Button size="sm" disabled>
-              {t.courier.finishDelivery}
-            </Button>
-          )}
-
-          {/* Cancel button */}
-          {canCancel && (
-            <Button size="sm" variant="outline" onClick={() => handleCancelCourierOrder(order.id)}>
-              {t.courier.cancelOrder}
-            </Button>
-          )}
-        </div>
-
-        {/* Technical error actions */}
-        {order.status === "locker_did_not_open" && (
-          <div className="flex gap-2 mt-1">
-            <Button size="sm" variant="destructive" onClick={() => handleCourierDeliveryAction(order.id, "retry_open")}>
-              {t.courier.retryOpenLocker}
-            </Button>
-            <Button
-              size="sm"
-              variant="destructive"
-              onClick={() => handleCourierDeliveryAction(order.id, "get_new_code")}
-            >
-              {t.courier.getNewCode}
-            </Button>
-          </div>
-        )}
-        {order.status === "locker_did_not_close" && (
-          <div className="flex gap-2 mt-1">
-            <Button
-              size="sm"
-              variant="destructive"
-              onClick={() => handleCourierDeliveryAction(order.id, "retry_close")}
-            >
-              {t.courier.retryCloseLocker}
-            </Button>
-            <Button size="sm" variant="destructive" onClick={() => handleCourierDeliveryAction(order.id, "reopen")}>
-              {t.courier.reopenLocker}
-            </Button>
-          </div>
-        )}
-
-        {/* Show "Locker did not open" only after trying to open (locker_opened state) */}
-        {order.status === "locker_opened" && (
-          <Button
-            size="sm"
-            variant="ghost"
-            className="text-xs"
-            onClick={() => {
-              handleCourierDeliveryAction(order.id, "locker_did_not_open")
-              // Transition to a new state for handling this specific error
-              setAssignedOrders((prevOrders) =>
-                prevOrders.map((o) => (o.id === order.id ? { ...o, status: "waiting_for_code_retry" } : o)),
-              )
-            }}
-          >
-            {t.courier.lockerDidNotOpen}
-          </Button>
-        )}
-        {order.status === "waiting_for_close" && (
-          <Button
-            size="sm"
-            variant="ghost"
-            className="text-xs"
-            onClick={() => handleCourierDeliveryAction(order.id, "locker_did_not_close")}
-          >
-            {t.courier.lockerDidNotClose}
-          </Button>
-        )}
-      </div>
-    )
-  }
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
@@ -1586,153 +1346,25 @@ const fetchUsers = async () => {
           </TabsContent>
 
           <TabsContent value="courier" className="mt-0">
-  <Card>
-    <CardHeader>
-      <CardTitle>{t.courier.title}</CardTitle>
-    </CardHeader>
-    <CardContent className="space-y-6">
-      {mode === "create" && (
-        <div>
-          <Label htmlFor="courier-id">{t.courier.courierId}</Label>
-          <Select value={selectedCourierId} onValueChange={setSelectedCourierId}>
-            <SelectTrigger id="courier-id">
-              <SelectValue placeholder={t.courier.selectCourierId} />
-            </SelectTrigger>
-            <SelectContent>
-              {users.filter((user) => user.role_name === "courier").map((courier) => (
-                <SelectItem key={courier.id} value={courier.id.toString()}>
-                  {courier.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-      )}
-
-      {courierMessage && (
-        <div>
-          <Badge variant="default" className={courierMessage.includes('Ошибка') || courierMessage.includes('не удалось') ? 'bg-red-600' : 'bg-green-600'}>
-            {courierMessage}
-          </Badge>
-        </div>
-      )}
-
-      {/* Доступные заказы */}
-      <div>
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="font-semibold">{t.courier.availableOrders}</h3>
-        </div>
-        <div className="border rounded-lg overflow-hidden">
-          <div className="flex gap-1">
-            <Button
-              variant={ordersFilter === "in" ? "default" : "outline"}
-              size="sm"
-              onClick={() => setOrdersFilter("in")}
-            >
-              в
-            </Button>
-            <Button
-              variant={ordersFilter === "out" ? "default" : "outline"}
-              size="sm"
-              onClick={() => setOrdersFilter("out")}
-            >
-              из
-            </Button>
-          </div>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>{t.courier.orderId}</TableHead>
-                <TableHead>{t.courier.locker}</TableHead>
-                <TableHead>{t.courier.cell}</TableHead>
-                <TableHead>{t.courier.size}</TableHead>
-                <TableHead></TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {availableOrders.map((order) => (
-                <TableRow key={order.id}>
-                  <TableCell>{order.id}</TableCell>
-                  <TableCell>
-                    {mockLockers.find((l) => l.id === order.lockerId)?.address || 'N/A'}
-                  </TableCell>
-                  <TableCell>{order.cell || 'N/A'}</TableCell>
-                  <TableCell>{order.size || 'N/A'}</TableCell>
-                  <TableCell>
-                    <Button size="sm" onClick={() => handleTakeOrder(order.id)}>
-                      {t.courier.takeOrder}
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
-      </div>
-
-      {/* Назначенные заказы */}
-      <div>
-        <div className="flex items-center justify-between">
-          <h3 className="font-semibold">{t.courier.assignedOrders}</h3>
-          <div className="flex gap-1">
-            <Button
-              variant={courierOrdersFilter === "all" ? "default" : "outline"}
-              size="sm"
-              onClick={() => setCourierOrdersFilter("all")}
-            >
-              {t.driver.all}
-            </Button>
-            <Button
-              variant={courierOrdersFilter === "active" ? "default" : "outline"}
-              size="sm"
-              onClick={() => setCourierOrdersFilter("active")}
-            >
-              {t.driver.active}
-            </Button>
-            <Button
-              variant={courierOrdersFilter === "archive" ? "default" : "outline"}
-              size="sm"
-              onClick={() => setCourierOrdersFilter("archive")}
-            >
-              {t.driver.archive}
-            </Button>
-          </div>
-        </div>
-        <div className="border rounded-lg overflow-hidden">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>{t.courier.orderId}</TableHead>
-                <TableHead>{t.courier.status}</TableHead>
-                <TableHead></TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {filteredAssignedOrders.map((order) => (
-                <TableRow key={order.id}>
-                  <TableCell>{order.id}</TableCell>
-                  <TableCell>
-                    <Badge
-                      variant={
-                        ["locker_did_not_open", "locker_did_not_close"].includes(order.status)
-                          ? "destructive"
-                          : order.status === "locker_closed"
-                            ? "secondary"
-                            : "default"
-                      }
-                    >
-                      {getCourierStatusLabel(order.status)}
-                    </Badge>
-                  </TableCell>
-                  <TableCell>{renderCourierActionButtons(order)}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
-      </div>
-    </CardContent>
-  </Card>
+  <CourierForm
+    selectedCourierId={selectedCourierId}
+    setSelectedCourierId={setSelectedCourierId}
+    availableOrders={filteredAvailableOrders}
+    assignedOrders={filteredAssignedOrders}
+    courierOrdersFilter={courierOrdersFilter}
+    setCourierOrdersFilter={setCourierOrdersFilter}
+    ordersFilter={ordersFilter}
+    setOrdersFilter={setOrdersFilter}
+    courierMessage={courierMessage}
+    mode={mode}
+    t={t}
+    language={language}
+    users={users}
+    handleTakeOrder={handleTakeOrder}
+    handleCancelCourierOrder={handleCancelCourierOrder}
+    handleCourierDeliveryAction={handleCourierDeliveryAction}
+    getCourierStatusLabel={getCourierStatusLabel}
+  />
 </TabsContent>
 
 
