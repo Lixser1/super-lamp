@@ -26,6 +26,7 @@ import {
 import { ClientForm } from "./client-form"
 import { CourierForm } from "./courier-form";
 import { DriverForm } from "./driver-form"
+import { RecipientForm } from "./recipient-form"
 interface RoleEmulatorProps {
   addLog: (log: any) => void
   currentTest: any
@@ -1187,164 +1188,23 @@ const filteredAvailableOrders = availableOrders.filter((o: any) => {
 
 
           <TabsContent value="recipient" className="mt-0">
-            <Card>
-              <CardHeader>
-                <CardTitle>{t.recipient.title}</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="p-4 bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded-lg">
-                  <h3 className="font-semibold text-blue-900 dark:text-blue-100 mb-2">{t.recipient.testOrders}</h3>
-                  <p className="text-sm text-blue-700 dark:text-blue-300 mb-3">{t.recipient.testOrdersDesc}</p>
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-2">
-                      <Badge variant="default" className="bg-blue-600">
-                        101
-                      </Badge>
-                      <span className="text-sm text-blue-800 dark:text-blue-200">
-                        {language === "ru"
-                          ? 'Поступил в постамат получения (Самовывоз) → кнопка "Забрать"'
-                          : 'Arrived at Recipient Locker (Self-pickup) → "Pick Up" button'}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Badge variant="default" className="bg-blue-600">
-                        102
-                      </Badge>
-                      <span className="text-sm text-blue-800 dark:text-blue-200">
-                        {language === "ru"
-                          ? 'Доставлен курьером → кнопка "Подтвердить"'
-                          : 'Delivered by Courier → "Confirm" button'}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Badge variant="default" className="bg-blue-600">
-                        103
-                      </Badge>
-                      <span className="text-sm text-blue-800 dark:text-blue-200">
-                        {language === "ru" ? "В пути → кнопки неактивны" : "In Transit → buttons inactive"}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-
-                {mode === "create" && (
-                  <div>
-                    <Label htmlFor="recipient-user-id">{t.recipient.userId}</Label>
-                    <Select value={selectedRecipientId} onValueChange={setSelectedRecipientId}>
-                      <SelectTrigger id="recipient-user-id">
-                        <SelectValue placeholder={t.recipient.selectUserId} />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {users.filter((user) => user.role_name === "recipient" || user.role_name === "client").map((user) => (
-                          <SelectItem key={user.id} value={user.id.toString()}>
-                            {language === "ru" ? "Получатель" : "Recipient"} #{user.id}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                )}
-
-                <div className="space-y-3">
-                  <div>
-                    <Label htmlFor="recipient-order-id">{t.recipient.orderId}</Label>
-                    <div className="flex gap-2">
-                      <Input
-                        id="recipient-order-id"
-                        type="number"
-                        placeholder={t.recipient.enterOrderId}
-                        value={recipientOrderId}
-                        onChange={(e) => setRecipientOrderId(e.target.value)}
-                      />
-                      <Button onClick={handleRecipientLookup} disabled={!recipientOrderId}>
-                        {t.recipient.trackingHistory}
-                      </Button>
-                    </div>
-                  </div>
-
-                  {recipientOrderDetails && (
-                    <div className="space-y-3 p-4 bg-muted rounded-lg">
-                      <div className="flex items-center gap-2">
-                        <span className="font-semibold">{t.recipient.orderId}:</span>
-                        <Badge variant="default">{recipientOrderDetails.id}</Badge>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <span className="font-semibold">{t.recipient.locker}:</span>
-                        <span>{recipientOrderDetails.locker}</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <span className="font-semibold">{t.recipient.cell}:</span>
-                        <Badge variant="outline">{recipientOrderDetails.cell}</Badge>
-                      </div>
-                    </div>
-                  )}
-
-                  {recipientTracking.length > 0 ? (
-                    <div>
-                      <h3 className="font-semibold mb-3">{t.recipient.trackingHistory}</h3>
-                      <div className="border rounded-lg overflow-hidden">
-                        <Table>
-                          <TableHeader>
-                            <TableRow>
-                              <TableHead>{t.recipient.status}</TableHead>
-                              <TableHead>{t.recipient.date}</TableHead>
-                            </TableRow>
-                          </TableHeader>
-                          <TableBody>
-                            {recipientTracking.map((track, idx) => (
-                              <TableRow key={idx}>
-                                <TableCell>
-                                  <Badge variant={idx === recipientTracking.length - 1 ? "default" : "secondary"}>
-                                    {track.status}
-                                  </Badge>
-                                </TableCell>
-                                <TableCell>
-                                  {track.date} {track.time}
-                                </TableCell>
-                              </TableRow>
-                            ))}
-                          </TableBody>
-                        </Table>
-                      </div>
-                    </div>
-                  ) : (
-                    recipientOrderId && (
-                      <div className="text-sm text-muted-foreground p-4 bg-muted rounded-lg">
-                        {t.recipient.noTracking}
-                      </div>
-                    )
-                  )}
-                </div>
-
-                <div className="flex gap-2 flex-wrap">
-                  {recipientOrderDetails &&
-                    recipientOrderDetails.currentStatus === "Поступил в постамат получения" &&
-                    recipientOrderDetails.recipientDelivery === "self" && (
-                      <Button
-                        onClick={() =>
-                          handleAction("recipient", "pickup_from_locker", { order_id: recipientOrderDetails.id })
-                        }
-                        className={highlightedAction === "pickup_from_locker" ? "animate-pulse" : ""}
-                      >
-                        {t.recipient.pickupFromLocker}
-                      </Button>
-                    )}
-
-                  {recipientOrderDetails &&
-                    recipientOrderDetails.currentStatus === "Доставлен курьером" &&
-                    recipientOrderDetails.recipientDelivery === "courier" && (
-                      <Button
-                        onClick={() =>
-                          handleAction("recipient", "confirm_delivery", { order_id: recipientOrderDetails.id })
-                        }
-                        className={highlightedAction === "confirm_delivery" ? "animate-pulse" : ""}
-                      >
-                        {t.recipient.confirmDelivery}
-                      </Button>
-                    )}
-                </div>
-              </CardContent>
-            </Card>
+  <RecipientForm
+    selectedRecipientId={selectedRecipientId}
+    setSelectedRecipientId={setSelectedRecipientId}
+    recipientOrderId={recipientOrderId}
+    setRecipientOrderId={setRecipientOrderId}
+    recipientTracking={recipientTracking}
+    setRecipientTracking={setRecipientTracking}
+    recipientOrderDetails={recipientOrderDetails}
+    setRecipientOrderDetails={setRecipientOrderDetails}
+    mode={mode}
+    t={t}
+    language={language}
+    users={users}
+    handleRecipientLookup={handleRecipientLookup}
+    handleAction={handleAction}
+    highlightedAction={highlightedAction}
+  />
           </TabsContent>
 
           <TabsContent value="courier" className="mt-0">

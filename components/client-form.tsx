@@ -35,7 +35,7 @@ interface ClientFormProps {
   language: string
   t: any
   addLog: (log: any) => void
-    users: Array<{ id: number; role_name: string }>
+  users: Array<{ id: number; name: string; role_name: string; city: string | null }>;
 }
 
 export function ClientForm({
@@ -67,45 +67,63 @@ export function ClientForm({
   }, [parcelType, setCellSize])
 
   const handleCreateOrder = async () => {
-    setOrderMessage(null)
+  setOrderMessage(null);
 
-    const data = {
-      client_user_id: parseInt(selectedClientId),
-      parcel_type: parcelType,
-      cell_size: cellSize,
-      sender_delivery: senderDelivery,
-      recipient_delivery: recipientDelivery,
-      recipient_user_id: recipientUserId,
-    }
+  // Находим выбранных клиента и получателя
+  const selectedClient = users.find(user => user.id === parseInt(selectedClientId));
+  const selectedRecipient = users.find(user => user.id === parseInt(recipientUserId));
 
-    try {
-      const response = await fetch('/api/proxy/client/create_order_request', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(data),
-      })
-
-      const result = await response.json()
-      setOrderMessage(result.message || 'Неизвестная ошибка')
-
-      if (result.success) {
-        setClientOrders([
-          ...clientOrders,
-          {
-            description: `${parcelType} to cell ${cellSize}`,
-            status: "processing",
-            canCancel: false,
-            isLoading: true,
-          },
-        ])
-      }
-    } catch (error) {
-      console.error('Error creating order:', error)
-      setOrderMessage('Ошибка при создании заказа')
-    }
+  // Проверяем, что оба пользователя найдены и у них есть город
+  if (!selectedClient || !selectedRecipient) {
+    setOrderMessage(language === "ru" ? "Выберите клиента и получателя" : "Select client and recipient");
+    return;
   }
+
+  // Проверяем, что города совпадают
+  if (selectedClient.city && selectedRecipient.city && selectedClient.city === selectedRecipient.city) {
+    setOrderMessage(language === "ru" ? "Клиент и получатель из одного города. Заказ создать нельзя." : "Client and recipient are from the same city. Cannot create order.");
+    return;
+  }
+
+  const data = {
+    client_user_id: parseInt(selectedClientId),
+    parcel_type: parcelType,
+    cell_size: cellSize,
+    sender_delivery: senderDelivery,
+    recipient_delivery: recipientDelivery,
+    recipient_user_id: recipientUserId,
+  };
+
+  try {
+    const response = await fetch('/api/proxy/client/create_order_request', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(data),
+    });
+
+    const result = await response.json();
+    setOrderMessage(result.message || (language === "ru" ? "Неизвестная ошибка" : "Unknown error"));
+
+    if (result.success) {
+      setClientOrders([
+        ...clientOrders,
+        {
+          id: Math.floor(Math.random() * 1000000),
+          description: `${parcelType} to cell ${cellSize}`,
+          status: "processing",
+          canCancel: false,
+          isLoading: true,
+        },
+      ]);
+    }
+  } catch (error) {
+    console.error('Error creating order:', error);
+    setOrderMessage(language === "ru" ? "Ошибка при создании заказа" : "Error creating order");
+  }
+};
+
 
   const handleCancelClientOrder = async (orderId: number) => {
     const data = {
@@ -163,36 +181,41 @@ export function ClientForm({
       </CardHeader>
       <CardContent className="space-y-4">
         <div>
-          <Label htmlFor="client-user-id">{t.client.userId}</Label>
-          <Select value={selectedClientId} onValueChange={setSelectedClientId}>
-            <SelectTrigger id="client-user-id">
-              <SelectValue placeholder={t.client.selectUserId} />
-            </SelectTrigger>
-            <SelectContent>
-              {users.map((user) => (
-                <SelectItem key={user.id} value={user.id.toString()}>
-                  {language === "ru" ? "Клиент" : "Client"} #{user.id}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
+  <Label htmlFor="client-user-id">{t.client.userId}</Label>
+  <Select value={selectedClientId} onValueChange={setSelectedClientId}>
+    <SelectTrigger id="client-user-id">
+      <SelectValue placeholder={t.client.selectUserId} />
+    </SelectTrigger>
+    <SelectContent>
+      {users
+        .filter(user => user.role_name === "client")
+        .map((user) => (
+          <SelectItem key={user.id} value={user.id.toString()}>
+            {language === "ru" ? "Клиент" : "Client"} #{user.id} {user.city ? `(${user.city})` : ""}
+          </SelectItem>
+        ))}
+    </SelectContent>
+  </Select>
+</div>
 
-        <div>
-          <Label htmlFor="recipient-user-id">{t.client.recipientUserId || "ID получателя"}</Label>
-          <Select value={recipientUserId} onValueChange={setRecipientUserId}>
+<div>
+  <Label htmlFor="recipient-user-id">{t.client.recipientUserId || "ID получателя"}</Label>
+  <Select value={recipientUserId} onValueChange={setRecipientUserId}>
     <SelectTrigger id="recipient-user-id">
       <SelectValue placeholder={t.client.selectRecipientUserId || "Выберите получателя"} />
     </SelectTrigger>
     <SelectContent>
-      {users.map((user) => (
-        <SelectItem key={user.id} value={user.id.toString()}>
-          {language === "ru" ? "Получатель" : "Recipient"} #{user.id}
-        </SelectItem>
-      ))}
+      {users
+        .filter(user => user.role_name === "recipient")
+        .map((user) => (
+          <SelectItem key={user.id} value={user.id.toString()}>
+            {language === "ru" ? "Получатель" : "Recipient"} #{user.id} {user.city ? `(${user.city})` : ""}
+          </SelectItem>
+        ))}
     </SelectContent>
   </Select>
-        </div>
+</div>
+
 
         <div className="grid gap-4">
           <div>
