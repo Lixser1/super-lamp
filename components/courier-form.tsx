@@ -5,7 +5,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-
+import { fetchOrdersByCourier } from "@/lib/api"
+import { useEffect, useState } from "react"
 
 interface CourierFormProps {
   selectedCourierId: string;
@@ -31,7 +32,7 @@ export function CourierForm({
   selectedCourierId,
   setSelectedCourierId,
   availableOrders,
-  assignedOrders,
+  assignedOrders: externalAssignedOrders, // Переименовываем для ясности
   courierOrdersFilter,
   setCourierOrdersFilter,
   ordersFilter,
@@ -46,8 +47,23 @@ export function CourierForm({
   handleCourierDeliveryAction,
   getCourierStatusLabel,
 }: CourierFormProps) {
-    console.log(availableOrders);
-    
+  // Локальное состояние для отображения заказов
+  const [displayedAssignedOrders, setDisplayedAssignedOrders] = useState<any[]>([]);
+
+  // Загружаем заказы при изменении selectedCourierId
+  useEffect(() => {
+    const loadCourierOrders = async () => {
+      if (!selectedCourierId) return;
+      try {
+        const orders = await fetchOrdersByCourier(selectedCourierId);
+        setDisplayedAssignedOrders(orders); // Обновляем локальное состояние
+      } catch (error) {
+        console.error("Ошибка при загрузке заказов:", error);
+      }
+    };
+
+    loadCourierOrders();
+  }, [selectedCourierId]);
 
   return (
     <Card>
@@ -89,56 +105,55 @@ export function CourierForm({
         )}
 
         {/* Доступные заказы */}
-<div>
-  <div className="flex items-center justify-between mb-3">
-    <h3 className="font-semibold">{t.courier.availableOrders}</h3>
-    <div className="flex gap-1">
-      <Button
-        variant={ordersFilter === "in" ? "default" : "outline"}
-        size="sm"
-        onClick={() => setOrdersFilter("in")}
-      >
-        в
-      </Button>
-      <Button
-        variant={ordersFilter === "out" ? "default" : "outline"}
-        size="sm"
-        onClick={() => setOrdersFilter("out")}
-      >
-        из
-      </Button>
-    </div>
-  </div>
-  <div className="border rounded-lg overflow-hidden">
-    <Table>
-      <TableHeader>
-        <TableRow>
-          <TableHead>{t.courier.orderId}</TableHead>
-          <TableHead>{t.courier.locker}</TableHead>
-          <TableHead>{t.courier.cell}</TableHead>
-          <TableHead>{t.courier.size}</TableHead>
-          <TableHead></TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {availableOrders.map((order) => (
-            <TableRow key={order.id}>
-                <TableCell>{order.id}</TableCell>
-                <TableCell>{order.lockerAddress || "N/A"}</TableCell>
-                <TableCell>{order.cell || "N/A"}</TableCell>
-                <TableCell>{order.size || "N/A"}</TableCell>
-                <TableCell>
-                <Button size="sm" onClick={() => handleTakeOrder(order.id)}>
-                    {t.courier.takeOrder}
-                </Button>
-                </TableCell>
-            </TableRow>
-            ))}
-      </TableBody>
-    </Table>
-  </div>
-</div>
-
+        <div>
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-semibold">{t.courier.availableOrders}</h3>
+            <div className="flex gap-1">
+              <Button
+                variant={ordersFilter === "in" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setOrdersFilter("in")}
+              >
+                в
+              </Button>
+              <Button
+                variant={ordersFilter === "out" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setOrdersFilter("out")}
+              >
+                из
+              </Button>
+            </div>
+          </div>
+          <div className="border rounded-lg overflow-hidden">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>{t.courier.orderId}</TableHead>
+                  <TableHead>{t.courier.locker}</TableHead>
+                  <TableHead>{t.courier.cell}</TableHead>
+                  <TableHead>{t.courier.size}</TableHead>
+                  <TableHead></TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {availableOrders.map((order) => (
+                  <TableRow key={order.id}>
+                    <TableCell>{order.id}</TableCell>
+                    <TableCell>{order.lockerAddress || "N/A"}</TableCell>
+                    <TableCell>{order.cell || "N/A"}</TableCell>
+                    <TableCell>{order.size || "N/A"}</TableCell>
+                    <TableCell>
+                      <Button size="sm" onClick={() => handleTakeOrder(order.id)}>
+                        {t.courier.takeOrder}
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </div>
 
         {/* Назначенные заказы */}
         <div>
@@ -174,27 +189,17 @@ export function CourierForm({
                 <TableRow>
                   <TableHead>{t.courier.orderId}</TableHead>
                   <TableHead>{t.courier.status}</TableHead>
-                  <TableHead></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {assignedOrders.map((order) => (
+                {displayedAssignedOrders.map((order) => (
                   <TableRow key={order.id}>
                     <TableCell>{order.id}</TableCell>
                     <TableCell>
-                      <Badge
-                        variant={
-                          ["locker_did_not_open", "locker_did_not_close"].includes(order.status)
-                            ? "destructive"
-                            : order.status === "locker_closed"
-                              ? "secondary"
-                              : "default"
-                        }
-                      >
-                        {getCourierStatusLabel(order.status)}
+                      <Badge variant="default">
+                        {order.status}
                       </Badge>
                     </TableCell>
-                    <TableCell>{renderCourierActionButtons(order)}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>

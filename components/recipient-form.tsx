@@ -6,6 +6,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { fetchAccessCodeView } from "@/lib/api";
 
 interface RecipientFormProps {
   selectedRecipientId: string;
@@ -37,6 +38,7 @@ interface RecipientFormProps {
   highlightedAction: string | null;
 }
 
+
 export function RecipientForm({
   selectedRecipientId,
   setSelectedRecipientId,
@@ -55,6 +57,7 @@ export function RecipientForm({
   highlightedAction,
 }: RecipientFormProps) {
 
+    
   // Функция для отправки запроса на подтверждение доставки
   const handleConfirmDelivery = async () => {
     if (!recipientOrderDetails) return;
