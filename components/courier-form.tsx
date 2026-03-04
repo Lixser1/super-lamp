@@ -32,7 +32,7 @@ export function CourierForm({
   selectedCourierId,
   setSelectedCourierId,
   availableOrders,
-  assignedOrders: externalAssignedOrders, // Переименовываем для ясности
+  assignedOrders: externalAssignedOrders,
   courierOrdersFilter,
   setCourierOrdersFilter,
   ordersFilter,
@@ -56,7 +56,7 @@ export function CourierForm({
       if (!selectedCourierId) return;
       try {
         const orders = await fetchOrdersByCourier(selectedCourierId);
-        setDisplayedAssignedOrders(orders); // Обновляем локальное состояние
+        setDisplayedAssignedOrders(orders);
       } catch (error) {
         console.error("Ошибка при загрузке заказов:", error);
       }
@@ -64,6 +64,14 @@ export function CourierForm({
 
     loadCourierOrders();
   }, [selectedCourierId]);
+
+  // Фильтруем заказы в зависимости от выбранного фильтра
+  const filteredAssignedOrders = displayedAssignedOrders.filter((order) => {
+    if (courierOrdersFilter === "all") return true;
+    if (courierOrdersFilter === "active") return order.status !== "locker_closed" && order.status !== "order_cancelled";
+    if (courierOrdersFilter === "archive") return order.status === "locker_closed" || order.status === "order_cancelled";
+    return true;
+  });
 
   return (
     <Card>
@@ -192,7 +200,7 @@ export function CourierForm({
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {displayedAssignedOrders.map((order) => (
+                {filteredAssignedOrders.map((order) => (
                   <TableRow key={order.id}>
                     <TableCell>{order.id}</TableCell>
                     <TableCell>
