@@ -283,6 +283,10 @@ useEffect(() => {
   }, [driverAssignedOrders]) 
 
   useEffect(() => {
+    refreshDriverOrders();
+  }, [selectedCity, isTabActive]);
+
+  useEffect(() => {
     if (mode === "run" && executionMode === "auto" && isPlaying) {
       const delay = Number.parseInt(delaySeconds) * 1000 || 2000
       const interval = setInterval(() => {
@@ -329,13 +333,6 @@ useEffect(() => {
       setActiveTripId(null)
     }
   }, [driverAssignedOrders])
-  useEffect(() => {
-  refreshDriverOrders();
-}, [selectedDriverId, isTabActive]); 
-
-useEffect(() => {
-  refreshDriverOrders();
-}, [selectedCity, isTabActive]);
 
   const handleAction = (role: string, action: string, extraData?: any) => {
     console.log(`[API] POST /${role}/${action}`, extraData || {})
@@ -468,10 +465,9 @@ const refreshDriverOrders = async () => {
   setIsRefreshingDriver(true);
 
   try {
-    const orders = await fetchDriverExchangeOrders(selectedCity);
-    // Просто сохраняем пришедшие заказы без преобразований
-    setDriverAvailableOrders(orders);
-    setDriverAssignedOrders([]);
+    // Получаем заказы с биржи водителя
+    const exchangeOrders = await fetchDriverExchangeOrders(selectedCity);
+    setDriverAvailableOrders(exchangeOrders);
   } catch (error) {
     console.error("Error refreshing driver orders:", error);
   } finally {
@@ -1238,9 +1234,6 @@ const filteredAvailableOrders = availableOrders.filter((o: any) => {
     selectedCity={selectedCity}
     setSelectedCity={setSelectedCity}
     driverAvailableOrders={driverAvailableOrders}
-    driverAssignedOrders={driverAssignedOrders}
-    tripFeedFilter={tripFeedFilter}
-    setTripFeedFilter={setTripFeedFilter}
     tripState={tripState}
     setTripState={setTripState}
     activeTripId={activeTripId}

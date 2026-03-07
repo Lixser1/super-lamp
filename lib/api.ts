@@ -39,7 +39,21 @@ export async function fetchOrdersByCourier(courier_id: string | number) {
   return response.json();
 }
 
+// Получение заказов водителя по driver_id
+export async function fetchDriverTrips(driverId: string | number) {
+  const response = await fetch(`/api/proxy/trips/driver/${driverId}`, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  });
 
+  if (!response.ok) {
+    throw new Error(`Request fetchDriverTrips failed: ${response.status} ${response.statusText}`);
+  }
+
+  return response.json();
+}
 
 // Все заказы. Временный запрос
 export async function fetchOrders() {

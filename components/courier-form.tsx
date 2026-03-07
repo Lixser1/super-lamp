@@ -12,9 +12,6 @@ interface CourierFormProps {
   selectedCourierId: string;
   setSelectedCourierId: (id: string) => void;
   availableOrders: any[];
-  assignedOrders: any[];
-  courierOrdersFilter: "all" | "active" | "archive";
-  setCourierOrdersFilter: (filter: "all" | "active" | "archive") => void;
   ordersFilter: "in" | "out";
   setOrdersFilter: (filter: "in" | "out") => void;
   courierMessage: string | null;
@@ -32,9 +29,6 @@ export function CourierForm({
   selectedCourierId,
   setSelectedCourierId,
   availableOrders,
-  assignedOrders: externalAssignedOrders,
-  courierOrdersFilter,
-  setCourierOrdersFilter,
   ordersFilter,
   setOrdersFilter,
   courierMessage,
@@ -44,11 +38,11 @@ export function CourierForm({
   users,
   handleTakeOrder,
   handleCancelCourierOrder,
-  handleCourierDeliveryAction,
   getCourierStatusLabel,
 }: CourierFormProps) {
-  // Локальное состояние для отображения заказов
-  const [displayedAssignedOrders, setDisplayedAssignedOrders] = useState<any[]>([]);
+  // Локальное состояние для заказов курьера
+  const [assignedOrders, setAssignedOrders] = useState<any[]>([]);
+  const [courierOrdersFilter, setCourierOrdersFilter] = useState<"all" | "active" | "archive">("active");
 
   // Загружаем заказы при изменении selectedCourierId
   useEffect(() => {
@@ -56,7 +50,7 @@ export function CourierForm({
       if (!selectedCourierId) return;
       try {
         const orders = await fetchOrdersByCourier(selectedCourierId);
-        setDisplayedAssignedOrders(orders);
+        setAssignedOrders(orders);
       } catch (error) {
         console.error("Ошибка при загрузке заказов:", error);
       }
@@ -66,12 +60,25 @@ export function CourierForm({
   }, [selectedCourierId]);
 
   // Фильтруем заказы в зависимости от выбранного фильтра
-  const filteredAssignedOrders = displayedAssignedOrders.filter((order) => {
+  const filteredAssignedOrders = assignedOrders.filter((order) => {
     if (courierOrdersFilter === "all") return true;
     if (courierOrdersFilter === "active") return order.status !== "locker_closed" && order.status !== "order_cancelled";
     if (courierOrdersFilter === "archive") return order.status === "locker_closed" || order.status === "order_cancelled";
     return true;
   });
+
+  // Функция для рендера кнопок действий
+  const renderCourierActionButtons = (order: any) => (
+    <div className="flex gap-2">
+      <Button
+        size="sm"
+        variant="outline"
+        onClick={() => handleCancelCourierOrder(order.id)}
+      >
+        {t.courier.cancelOrder}
+      </Button>
+    </div>
+  );
 
   return (
     <Card>
@@ -197,6 +204,7 @@ export function CourierForm({
                 <TableRow>
                   <TableHead>{t.courier.orderId}</TableHead>
                   <TableHead>{t.courier.status}</TableHead>
+                  <TableHead></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -204,9 +212,20 @@ export function CourierForm({
                   <TableRow key={order.id}>
                     <TableCell>{order.id}</TableCell>
                     <TableCell>
-                      <Badge variant="default">
-                        {order.status}
+                      <Badge
+                        variant={
+                          ["locker_did_not_open", "locker_did_not_close"].includes(order.status)
+                            ? "destructive"
+                            : order.status === "locker_closed"
+                              ? "secondary"
+                              : "default"
+                        }
+                      >
+                        {getCourierStatusLabel(order.status)}
                       </Badge>
+                    </TableCell>
+                    <TableCell>
+                      {renderCourierActionButtons(order)}
                     </TableCell>
                   </TableRow>
                 ))}

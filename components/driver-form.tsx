@@ -1,5 +1,5 @@
 "use client"
-import React from "react";
+import React, { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { fetchDriverTrips } from "@/lib/api";
 
 interface DriverFormProps {
   selectedDriverId: string;
@@ -14,9 +15,6 @@ interface DriverFormProps {
   selectedCity: string;
   setSelectedCity: (city: string) => void;
   driverAvailableOrders: any[];
-  driverAssignedOrders: any[];
-  tripFeedFilter: "all" | "active" | "archive";
-  setTripFeedFilter: (filter: "all" | "active" | "archive") => void;
   tripState: "at_from_locker" | "in_transit" | "at_to_locker";
   setTripState: (state: "at_from_locker" | "in_transit" | "at_to_locker") => void;
   activeTripId: number | null;
@@ -66,9 +64,6 @@ export function DriverForm({
   selectedCity,
   setSelectedCity,
   driverAvailableOrders,
-  driverAssignedOrders,
-  tripFeedFilter,
-  setTripFeedFilter,
   tripState,
   setTripState,
   activeTripId,
@@ -111,6 +106,43 @@ export function DriverForm({
   handlePlaceParcelInCell,
   handleCloseOrder,
 }: DriverFormProps) {
+
+  // Внутреннее состояние для загруженных с API данных
+  const [driverAssignedOrders, setDriverAssignedOrders] = useState<any[]>([]);
+  const [tripFeedFilter, setTripFeedFilter] = useState<"all" | "active" | "archive">("active");
+  const [isLoadingTrips, setIsLoadingTrips] = useState(false);
+
+  // Загрузка заказов водителя при изменении selectedDriverId
+  useEffect(() => {
+    if (!selectedDriverId) {
+      setDriverAssignedOrders([]);
+      return;
+    }
+
+    const loadDriverTrips = async () => {
+      setIsLoadingTrips(true);
+      try {
+        const tripsData = await fetchDriverTrips(selectedDriverId);
+        const mappedOrders = (tripsData.trips || tripsData || []).map((trip: any) => ({
+          id: trip.id,
+          tripId: trip.trip_id || trip.id,
+          status: trip.status || "assigned_by_operator_driver",
+          tripStatus: trip.trip_status || trip.status || "at_from_locker",
+          driverId: trip.driver_id || parseInt(selectedDriverId),
+          lockerId: trip.locker_id || trip.from_locker_id,
+        }));
+        setDriverAssignedOrders(mappedOrders);
+      } catch (error) {
+        console.error("Error loading driver trips:", error);
+        setDriverAssignedOrders([]);
+      } finally {
+        setIsLoadingTrips(false);
+      }
+    };
+
+    loadDriverTrips();
+  }, [selectedDriverId]);
+
   return (
     <Card>
       <CardHeader>
@@ -119,7 +151,7 @@ export function DriverForm({
       <div className="mb-4">
         <Label htmlFor="city-select">{language === "ru" ? "Город" : "City"}</Label>
         <Select value={selectedCity} onValueChange={setSelectedCity}>
-          <SelectTrigger id="city-select" className="w-[180px]">
+          <SelectTrigger id="city-select" className="w-45">
             <SelectValue placeholder={language === "ru" ? "Выберите город" : "Select city"} />
           </SelectTrigger>
           <SelectContent>
