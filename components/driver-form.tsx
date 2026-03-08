@@ -123,13 +123,18 @@ export function DriverForm({
       setIsLoadingTrips(true);
       try {
         const tripsData = await fetchDriverTrips(selectedDriverId);
-        const mappedOrders = (tripsData.trips || tripsData || []).map((trip: any) => ({
+        // Ответ - массив напрямую, без ключа trips
+        const mappedOrders = (Array.isArray(tripsData) ? tripsData : []).map((trip: any) => ({
           id: trip.id,
-          tripId: trip.trip_id || trip.id,
-          status: trip.status || "assigned_by_operator_driver",
-          tripStatus: trip.trip_status || trip.status || "at_from_locker",
-          driverId: trip.driver_id || parseInt(selectedDriverId),
-          lockerId: trip.locker_id || trip.from_locker_id,
+          tripId: trip.id,
+          status: trip.status,
+          active: trip.active,
+          fromCity: trip.from_city,
+          toCity: trip.to_city,
+          pickupLockerId: trip.pickup_locker_id,
+          deliveryLockerId: trip.delivery_locker_id,
+          createdAt: trip.created_at,
+          orders: trip.orders || [],
         }));
         setDriverAssignedOrders(mappedOrders);
       } catch (error) {
@@ -244,8 +249,7 @@ export function DriverForm({
               <TableHeader>
                 <TableRow>
                   <TableHead>{t.driver.tripId}</TableHead>
-                  <TableHead>{t.driver.status}</TableHead>
-                  <TableHead>{t.driver.tripStatus}</TableHead>
+                  <TableHead>{language === "ru" ? "Заказы" : "Orders"}</TableHead>
                   <TableHead></TableHead>
                 </TableRow>
               </TableHeader>
@@ -253,9 +257,9 @@ export function DriverForm({
                 {driverAssignedOrders
                   .filter((order) => {
                     if (tripFeedFilter === "active") {
-                      return order.tripStatus !== "completed";
+                      return order.active === 1;
                     } else if (tripFeedFilter === "archive") {
-                      return order.tripStatus === "completed";
+                      return order.active !== 1;
                     }
                     return true;
                   })
@@ -263,60 +267,44 @@ export function DriverForm({
                     <TableRow key={order.id}>
                       <TableCell>{order.tripId}</TableCell>
                       <TableCell>
-                        <Badge
-                          variant={order.status === "taken_from_exchange_driver" ? "default" : "secondary"}
-                        >
-                          {order.status === "taken_from_exchange_driver"
-                            ? language === "ru"
-                              ? "Взят с биржи"
-                              : "Taken from exchange"
-                            : language === "ru"
-                              ? "Назначен оператором"
-                              : "Assigned by operator"}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant="outline">
-                          {order.tripStatus === "at_from_locker"
-                            ? t.driver.atLockerFrom
-                            : order.tripStatus === "in_transit"
-                              ? t.driver.inTransit
-                              : order.tripStatus === "at_to_locker"
-                                ? t.driver.atLockerTo
-                                : language === "ru"
-                                  ? "Завершен"
-                                  : "Completed"}
-                        </Badge>
+                        {order.orders && order.orders.length > 0 ? (
+                          <Select>
+                            <SelectTrigger className="w-48">
+                              <SelectValue placeholder={`${order.orders.length} ${language === "ru" ? "заказов" : "orders"}`} />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {order.orders.map((o: any) => (
+                                <SelectItem key={o.id} value={o.id.toString()}>
+                                  #{o.id} {o.description || ""}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        ) : (
+                          <span className="text-muted-foreground text-sm">
+                            {language === "ru" ? "Нет заказов" : "No orders"}
+                          </span>
+                        )}
                       </TableCell>
                       <TableCell className="space-x-2">
-                        {order.tripStatus === "in_transit" ? (
-                          <Button
-                            size="sm"
-                            onClick={() => {
-                              setActiveTripId(order.tripId);
-                              setTripId(order.tripId);
-                              handleChangeTripState("at_to_locker");
-                            }}
-                          >
-                            {t.driver.arrived}
-                          </Button>
-                        ) : order.tripStatus !== "completed" && order.tripStatus !== "at_to_locker" ? (
-                          <Button
-                            size="sm"
-                            onClick={() => handleStartTrip(order.tripId)}
-                            disabled={hasActiveTrip}
-                          >
-                            {t.driver.startTrip}
-                          </Button>
+                        {order.active === 1 ? (
+                          <>
+                            <Button
+                              size="sm"
+                              onClick={() => handleStartTrip(order.tripId)}
+                              disabled={hasActiveTrip}
+                            >
+                              {t.driver.startTrip}
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleCancelDriverOrder(order.id)}
+                            >
+                              {t.driver.cancelOrder}
+                            </Button>
+                          </>
                         ) : null}
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => handleCancelDriverOrder(order.id)}
-                          disabled={order.tripStatus === "completed"}
-                        >
-                          {t.driver.cancelOrder}
-                        </Button>
                       </TableCell>
                     </TableRow>
                   ))}
