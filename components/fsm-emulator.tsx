@@ -1,64 +1,99 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { fetchFsmEntities, fetchFsmEntityActions } from "@/lib/api"
 
 interface FSMEmulatorProps {
   addLog: (log: any) => void
   highlightedAction?: string | null
 }
 
-const mockEntities = [
-  { entityType: "order", entityId: 1, currentState: "created", description: "Order #1 - Electronics" },
-  { entityType: "order", entityId: 2, currentState: "reserved", description: "Order #2 - Books" },
-  { entityType: "stage_order", entityId: 1, currentState: "assigned", description: "Stage Order #1" },
-  { entityType: "trip", entityId: 1, currentState: "in_progress", description: "Trip #1 - Route A" },
-]
-
-const stateActions: Record<string, string[]> = {
-  created: ["reserve_cell", "cancel"],
-  reserved: ["assign_courier", "cancel"],
-  assigned: ["pickup_from_cell", "cancel"],
-  in_progress: ["confirm_delivery", "mark_failed"],
+interface FsmEntity {
+  id: number
+  status: string
+  description: string
+  created_at: string
+  entity_type: string
 }
 
-const mockHistory = [
-  { action: "reserve_cell", fromState: "created", toState: "reserved", createdAt: "2025-10-24 10:30:00" },
-  { action: "assign_courier", fromState: "reserved", toState: "assigned", createdAt: "2025-10-24 10:35:00" },
-]
+interface EntityActions {
+  entity_type: string
+  entity_id: number
+  current_state: string
+  available_actions: string[]
+}
 
 export function FSMEmulator({ addLog, highlightedAction }: FSMEmulatorProps) {
-  const [selectedEntity, setSelectedEntity] = useState<any>(null)
+  const [entities, setEntities] = useState<FsmEntity[]>([])
+  const [selectedEntity, setSelectedEntity] = useState<FsmEntity | null>(null)
   const [selectedAction, setSelectedAction] = useState<Record<number, string>>({})
+  const [entityActions, setEntityActions] = useState<Record<number, EntityActions>>({})
+  const [loadingActions, setLoadingActions] = useState<Record<number, boolean>>({})
   const [filterType, setFilterType] = useState<string>("all")
   const [filterState, setFilterState] = useState<string>("all")
   const [historyOpen, setHistoryOpen] = useState(false)
+  const [isLoading, setIsLoading] = useState(false)
 
-  const filteredEntities = mockEntities.filter((entity) => {
-    if (filterType !== "all" && entity.entityType !== filterType) return false
-    if (filterState !== "all" && entity.currentState !== filterState) return false
-    return true
-  })
+  // Загрузка данных при изменении фильтров
+  useEffect(() => {
+    const loadEntities = async () => {
+      setIsLoading(true)
+      try {
+        const data = await fetchFsmEntities(filterType, filterState, 50)
+        setEntities(data)
+      } catch (error) {
+        console.error("Error loading FSM entities:", error)
+        setEntities([])
+      } finally {
+        setIsLoading(false)
+      }
+    }
 
-  const handlePerformAction = (entity: any) => {
-    const action = selectedAction[entity.entityId]
+    loadEntities()
+  }, [filterType, filterState])
+
+  // Загрузка доступных действий для сущности
+  const loadEntityActions = async (entity: FsmEntity) => {
+    if (entityActions[entity.id]) return // Уже загружено
+
+    setLoadingActions((prev) => ({ ...prev, [entity.id]: true }))
+    try {
+      const data = await fetchFsmEntityActions(entity.entity_type, entity.id)
+      setEntityActions((prev) => ({ ...prev, [entity.id]: data }))
+    } catch (error) {
+      console.error("Error loading entity actions:", error)
+    } finally {
+      setLoadingActions((prev) => ({ ...prev, [entity.id]: false }))
+    }
+  }
+
+  const handleOpenChange = (open: boolean) => {
+    setHistoryOpen(open)
+    if (open && selectedEntity) {
+      loadEntityActions(selectedEntity)
+    }
+  }
+
+  const handlePerformAction = (entity: FsmEntity) => {
+    const action = selectedAction[entity.id]
     if (!action) return
 
     console.log(`[API] POST /fsm/perform`, {
-      entity_type: entity.entityType,
-      entity_id: entity.entityId,
+      entity_type: entity.entity_type,
+      entity_id: entity.id,
       action_name: action,
       user_id: 100,
     })
 
     addLog({
       role: "FSM",
-      action: `${action} on ${entity.entityType} #${entity.entityId}`,
-      statusBefore: entity.currentState,
+      action: `${action} on ${entity.entity_type} #${entity.id}`,
+      statusBefore: entity.status,
       statusAfter: "Updated",
       result: "OK",
     })
@@ -107,87 +142,98 @@ export function FSMEmulator({ addLog, highlightedAction }: FSMEmulatorProps) {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {filteredEntities.map((entity) => (
-              <TableRow
-                key={`${entity.entityType}-${entity.entityId}`}
-                className="cursor-pointer hover:bg-muted/50"
-                onClick={() => {
-                  setSelectedEntity(entity)
-                  setHistoryOpen(true)
-                }}
-              >
-                <TableCell className="font-medium">{entity.entityType}</TableCell>
-                <TableCell>{entity.entityId}</TableCell>
-                <TableCell>
-                  <span className="inline-flex items-center rounded-full px-2 py-1 text-xs font-medium bg-primary/10 text-primary">
-                    {entity.currentState}
-                  </span>
-                </TableCell>
-                <TableCell>{entity.description}</TableCell>
-                <TableCell>
-                  <Select
-                    value={selectedAction[entity.entityId] || ""}
-                    onValueChange={(value) => setSelectedAction((prev) => ({ ...prev, [entity.entityId]: value }))}
-                  >
-                    <SelectTrigger
-                      className={`w-[180px] ${highlightedAction && stateActions[entity.currentState]?.includes(highlightedAction) ? "animate-pulse border-primary" : ""}`}
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <SelectValue placeholder="Select action" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {stateActions[entity.currentState]?.map((action) => (
-                        <SelectItem key={action} value={action}>
-                          {action}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </TableCell>
-                <TableCell>
-                  <Button
-                    size="sm"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      handlePerformAction(entity)
-                    }}
-                    disabled={!selectedAction[entity.entityId]}
-                  >
-                    Perform
-                  </Button>
+            {isLoading ? (
+              <TableRow>
+                <TableCell colSpan={6} className="text-center text-muted-foreground">
+                  Loading...
                 </TableCell>
               </TableRow>
-            ))}
+            ) : entities.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={6} className="text-center text-muted-foreground">
+                  No entities found
+                </TableCell>
+              </TableRow>
+            ) : (
+              entities.map((entity) => (
+                <TableRow
+                  key={`${entity.entity_type}-${entity.id}`}
+                  className="cursor-pointer hover:bg-muted/50"
+                  onClick={() => {
+                    setSelectedEntity(entity)
+                    setHistoryOpen(true)
+                    loadEntityActions(entity)
+                  }}
+                >
+                  <TableCell className="font-medium">{entity.entity_type}</TableCell>
+                  <TableCell>{entity.id}</TableCell>
+                  <TableCell>
+                    <span className="inline-flex items-center rounded-full px-2 py-1 text-xs font-medium bg-primary/10 text-primary">
+                      {entity.status}
+                    </span>
+                  </TableCell>
+                  <TableCell>{entity.description}</TableCell>
+                  <TableCell onClick={(e) => e.stopPropagation()}>
+                    {loadingActions[entity.id] ? (
+                      <span className="text-sm text-muted-foreground">Loading...</span>
+                    ) : (
+                      <Select
+                        value={selectedAction[entity.id] || ""}
+                        onValueChange={(value) => setSelectedAction((prev) => ({ ...prev, [entity.id]: value }))}
+                        onOpenChange={(open) => {
+                          if (open) loadEntityActions(entity)
+                        }}
+                      >
+                        <SelectTrigger className="w-[180px]">
+                          <SelectValue placeholder="Select action" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {entityActions[entity.id]?.available_actions?.map((action) => (
+                            <SelectItem key={action} value={action}>
+                              {action}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
+                  </TableCell>
+                  <TableCell onClick={(e) => e.stopPropagation()}>
+                    <Button
+                      size="sm"
+                      onClick={() => handlePerformAction(entity)}
+                      disabled={!selectedAction[entity.id]}
+                    >
+                      Perform
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))
+            )}
           </TableBody>
         </Table>
 
-        <Dialog open={historyOpen} onOpenChange={setHistoryOpen}>
+        <Dialog open={historyOpen} onOpenChange={handleOpenChange}>
           <DialogContent>
             <DialogHeader>
               <DialogTitle>
-                Action History - {selectedEntity?.entityType} #{selectedEntity?.entityId}
+                Entity Details - {selectedEntity?.entity_type} #{selectedEntity?.id}
               </DialogTitle>
             </DialogHeader>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Action</TableHead>
-                  <TableHead>From State</TableHead>
-                  <TableHead>To State</TableHead>
-                  <TableHead>Timestamp</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {mockHistory.map((item, idx) => (
-                  <TableRow key={idx}>
-                    <TableCell className="font-medium">{item.action}</TableCell>
-                    <TableCell>{item.fromState}</TableCell>
-                    <TableCell>{item.toState}</TableCell>
-                    <TableCell className="text-sm text-muted-foreground">{item.createdAt}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            <div className="space-y-2">
+              <p><strong>Status:</strong> {selectedEntity?.status}</p>
+              <p><strong>Description:</strong> {selectedEntity?.description}</p>
+              <p><strong>Created:</strong> {selectedEntity?.created_at ? new Date(selectedEntity.created_at).toLocaleString() : "-"}</p>
+              {entityActions[selectedEntity?.id || 0]?.available_actions && (
+                <div className="mt-4">
+                  <strong>Available Actions:</strong>
+                  <ul className="mt-2 list-disc list-inside">
+                    {entityActions[selectedEntity?.id || 0].available_actions.map((action) => (
+                      <li key={action} className="text-sm">{action}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
           </DialogContent>
         </Dialog>
       </CardContent>

@@ -70,3 +70,45 @@ export async function fetchOrders() {
 
   return response.json();
 }
+
+// Получение сущностей для FSM эмулятора
+export async function fetchFsmEntities(
+  entityType: string = "all",
+  status: string = "all",
+  limit: number = 50
+) {
+  const params = new URLSearchParams({
+    entity_type: entityType,
+    status: status,
+    limit: String(limit),
+  });
+
+  const response = await fetch(`/api/proxy/fsm/emulator/entities?${params.toString()}`, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Request fetchFsmEntities failed: ${response.status} ${response.statusText}`);
+  }
+
+  return response.json();
+}
+
+// Получение доступных действий для конкретной сущности
+export async function fetchFsmEntityActions(entityType: string, entityId: number) {
+  const response = await fetch(`/api/proxy/fsm/emulator/entities/${entityType}/${entityId}/actions`, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Request fetchFsmEntityActions failed: ${response.status} ${response.statusText}`);
+  }
+
+  return response.json();
+}
