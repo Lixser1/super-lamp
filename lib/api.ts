@@ -1,4 +1,4 @@
-// Получение кода для подтверждения заказа
+// Получение кода для подтверждения заказа. Работа с ячейками
 export async function fetchAccessCodeView(
   order_id: number,
   leg: string,
@@ -6,11 +6,14 @@ export async function fetchAccessCodeView(
 ) {
   const params = new URLSearchParams({
     order_id: String(order_id),
-    leg: String(leg),
+    leg: leg,
     user_id: String(user_id),
   });
 
-  const response = await fetch(`/api/proxy/access-code/view?${params.toString()}`, {
+  const url = `/api/proxy/access-code/view?${params.toString()}`;
+  console.log('Sending GET to:', url);
+
+  const response = await fetch(url, {
     method: 'GET',
     headers: {
       'Content-Type': 'application/json',
@@ -18,6 +21,7 @@ export async function fetchAccessCodeView(
   });
 
   if (!response.ok) {
+    console.error(`Request fetchAccessCodeView failed: ${response.status} ${response.statusText}`);
     throw new Error(`Request fetchAccessCodeView failed: ${response.status} ${response.statusText}`);
   }
 
@@ -54,23 +58,57 @@ export async function fetchDriverTrips(driverId: string | number) {
 
   return response.json();
 }
+export type FsmEnqueueRequest = {
+  entity_type: 'order' | 'trip' | string
+  entity_id: number
+  process_name: string
+  user_id: number
+  target_user_id?: number
+  target_role?: string
+  user_role?: string
+  metadata?: Record<string, unknown>
+}
 
-// Все заказы. Временный запрос
-export async function fetchOrders() {
-  const response = await fetch('/api/proxy/orders', {
-    method: 'GET',
+export function makeFsmEnqueueRequest(
+  params: {
+    entity_type: FsmEnqueueRequest['entity_type']
+    entity_id: number
+    process_name: string
+    user_id: number
+    target_user_id?: number
+    target_role?: string
+    user_role?: string
+    metadata?: Record<string, unknown>
+  }
+): FsmEnqueueRequest {
+  return {
+    entity_type: params.entity_type,
+    entity_id: params.entity_id,
+    process_name: params.process_name,
+    user_id: params.user_id,
+    target_user_id: params.target_user_id ?? params.user_id,
+    target_role: params.target_role,
+    user_role: params.user_role,
+    metadata: params.metadata ?? {},
+  }
+}
+
+export async function enqueueFsmRequest(data: FsmEnqueueRequest) {
+  const response = await fetch('/api/proxy/fsm/enqueue', {
+    method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-  });
+    body: JSON.stringify(data),
+  })
 
   if (!response.ok) {
-    throw new Error(`Request failed: ${response.status} ${response.statusText}`);
+    const errorData = await response.json().catch(() => null)
+    throw new Error(errorData?.message || `Request enqueueFsmRequest failed: ${response.status} ${response.statusText}`)
   }
 
-  return response.json();
+  return response.json()
 }
-
 // Получение сущностей для FSM эмулятора
 export async function fetchFsmEntities(
   entityType: string = "all",

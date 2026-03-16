@@ -6,7 +6,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { fetchAccessCodeView, fetchOrderTrack } from "@/lib/api";
+import { enqueueFsmRequest, fetchAccessCodeView, fetchOrderTrack, makeFsmEnqueueRequest } from "@/lib/api";
 import { useState } from "react";
 
 interface RecipientFormProps {
@@ -40,7 +40,10 @@ export function RecipientForm({
     cell: string;
     recipientDelivery: "self" | "courier";
     currentStatus: string;
+    isCompleted?: boolean;
   } | null>(null)
+  const [recipientLeg, setRecipientLeg] = useState<"pickup" | "delivery">("pickup")
+  const [pinDisplay, setPinDisplay] = useState<string | null>(null)
 
   const handleRecipientLookup = async () => {
     if (!recipientOrderId) return;
@@ -59,33 +62,44 @@ export function RecipientForm({
         }));
 
       // Обновляем детали заказа
+      const isCompleted = !!data.path?.find(
+        (item: any) => item.status === 'order_parcel_confirmed_post2' && item.is_completed,
+      )
+      const leg: "pickup" | "delivery" =
+        data.current_status === 'order_parcel_confirmed_post2' && isCompleted ? 'delivery' : 'pickup'
+
       setRecipientOrderDetails({
         id: data.order_id,
         locker: '', // Нет в данных
         cell: '', // Нет в данных
         recipientDelivery: data.delivery_type === 'courier' ? 'courier' : 'self', // Предполагаем на основе delivery_type
-        currentStatus: data.current_status
+        currentStatus: data.current_status,
+        isCompleted,
       });
+      setRecipientLeg(leg)
+      setPinDisplay(null); // Сброс PIN при новом поиске
 
       setRecipientTracking(tracking);
       addLog({
         role: "recipient",
         action: "lookup_order",
-        order_id: parseInt(recipientOrderId)
+        order_id: parseInt(recipientOrderId),
       });
     } catch (error) {
       console.error('Error fetching order track:', error);
       setRecipientTracking([]);
       setRecipientOrderDetails(null);
+      setRecipientLeg("pickup")
+      setPinDisplay(null);
     }
   };
 
     
-  // Функция для отправки запроса на подтверждение доставки
-  const handleConfirmDelivery = async () => {
+  // Функция для отправки запроса на создание пина (request_locker_access_code)
+  const handleCreatePin = async () => {
     if (!recipientOrderDetails) return;
 
-    const requestData = {
+    const requestData = makeFsmEnqueueRequest({
       entity_type: "order",
       entity_id: recipientOrderDetails.id,
       process_name: "request_locker_access_code",
@@ -93,37 +107,54 @@ export function RecipientForm({
       target_user_id: parseInt(selectedRecipientId),
       user_role: "recipient",
       metadata: {
-        leg: "delivery"
-      }
-    };
+        leg: recipientLeg,
+      },
+    });
 
     try {
-      const response = await fetch('/api/proxy/fsm/enqueue', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(requestData),
-      });
-
-      if (!response.ok) {
-        throw new Error('Network response was not ok');
-      }
-
-      const result = await response.json();
+      const result = await enqueueFsmRequest(requestData);
       addLog({
         role: "recipient",
-        action: "confirm_delivery",
+        action: "request_locker_access_code",
         order_id: recipientOrderDetails.id,
-        result
+        result,
       });
     } catch (error) {
-      console.error('Error confirming delivery:', error);
+      console.error('Error creating pin:', error);
       addLog({
         role: "recipient",
-        action: "confirm_delivery_error",
+        action: "request_locker_access_code_error",
         order_id: recipientOrderDetails.id,
-        error: String(error)
+        error: String(error),
+      });
+    }
+  };
+
+  // Функция для получения PIN-кода
+  const handleShowPin = async () => {
+    if (!recipientOrderDetails) return;
+
+    try {
+      const data = await fetchAccessCodeView(
+        recipientOrderDetails.id,
+        recipientLeg,
+        parseInt(selectedRecipientId)
+      );
+      setPinDisplay(data.pin);
+      addLog({
+        role: "recipient",
+        action: "show_pin",
+        order_id: recipientOrderDetails.id,
+        pin: data.pin,
+      });
+    } catch (error) {
+      console.error('Error fetching PIN:', error);
+      setPinDisplay(null);
+      addLog({
+        role: "recipient",
+        action: "show_pin_error",
+        order_id: recipientOrderDetails.id,
+        error: String(error),
       });
     }
   };
@@ -248,6 +279,25 @@ export function RecipientForm({
                   </TableBody>
                 </Table>
               </div>
+
+              {recipientOrderDetails && (
+                <div className="mt-4 flex gap-2 items-center">
+                  <Button onClick={handleCreatePin}>
+                    {language === "ru" ? "Создать PIN" : "Create PIN"}
+                  </Button>
+                  <Button onClick={handleShowPin} variant="outline">
+                    {language === "ru" ? "Отобразить PIN" : "Show PIN"}
+                  </Button>
+                  {pinDisplay && (
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold">{language === "ru" ? "PIN:" : "PIN:"}</span>
+                      <Badge variant="default" className="text-lg px-3 py-1">
+                        {pinDisplay}
+                      </Badge>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           ) : (
             recipientOrderId && (
@@ -280,7 +330,7 @@ export function RecipientForm({
             recipientOrderDetails.currentStatus === "Доставлен курьером" &&
             recipientOrderDetails.recipientDelivery === "courier" && (
               <Button
-                onClick={handleConfirmDelivery}
+                onClick={handleCreatePin}
                 className={highlightedAction === "confirm_delivery" ? "animate-pulse" : ""}
               >
                 {t.recipient.confirmDelivery}

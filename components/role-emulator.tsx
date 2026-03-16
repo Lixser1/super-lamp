@@ -13,7 +13,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { FSMEmulator } from "@/components/fsm-emulator"
 import { useLanguage } from "@/lib/language-context"
-import { fetchOrderTrack } from "@/lib/api"
+import { enqueueFsmRequest, fetchOrderTrack, makeFsmEnqueueRequest } from "@/lib/api"
 import {
   mockLockers,
   mockOrders,
@@ -33,16 +33,6 @@ interface RoleEmulatorProps {
   currentTest: any
   onModeChange?: (mode: "create" | "run") => void
   onTabChange?: (tab: string) => void
-}
-
-interface FsmEnqueueRequest {
-  entity_type: "order" | "trip";
-  entity_id: number;
-  process_name: string;
-  user_id: number;
-  target_user_id: number;
-  target_role?: string;
-  metadata?: any;
 }
 
 interface User {
@@ -466,36 +456,19 @@ const refreshDriverOrders = async () => {
   }
 };
 
-async function enqueueOrder(data: FsmEnqueueRequest) {
-  const response = await fetch("/api/proxy/fsm/enqueue", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(data),
-  });
-
-  if (!response.ok) {
-    const errorData = await response.json();
-    throw new Error(errorData.message || "Ошибка при отправке запроса");
-  }
-
-  return await response.json();
-}
-
   const handleTakeOrder = async (orderId: number) => {
   setCourierMessage(null);
 
-  const requestData: FsmEnqueueRequest = {
+  const requestData = makeFsmEnqueueRequest({
     entity_type: "order",
     entity_id: orderId,
     process_name: "order_assign_courier1", // Исправлено на нужный процесс
     user_id: parseInt(selectedCourierId),
     target_user_id: parseInt(selectedCourierId), // Оба ID совпадают
-  };
+  });
 
   try {
-    const result = await enqueueOrder(requestData);
+    const result = await enqueueFsmRequest(requestData);
     setCourierMessage(result.message || "Действие выполнено");
     handleAction("courier", "take_order", result);
     await refreshCourierOrders();
@@ -506,34 +479,23 @@ async function enqueueOrder(data: FsmEnqueueRequest) {
 };
 
   const handleCourierDeliveryAction = async (orderId: number, action: string) => {
-    setCourierMessage(null); // Сбрасываем предыдущее сообщение
+    setCourierMessage(null);
     let processName = ""
     if (action === "confirm_placed") {
       processName = "courier_place_in_cell"
     }
 
     if (processName) {
-      const data = {
+      const requestData = makeFsmEnqueueRequest({
         entity_type: "order",
         entity_id: orderId,
         process_name: processName,
         user_id: parseInt(selectedCourierId),
-      }
+        target_user_id: parseInt(selectedCourierId),
+      })
 
       try {
-        const response = await fetch('/api/proxy/fsm/enqueue', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(data),
-        })
-
-        if (!response.ok) {
-          throw new Error('Network response was not ok')
-        }
-
-        const result = await response.json()
+        const result = await enqueueFsmRequest(requestData)
         setCourierMessage(result.message || 'Действие выполнено');
         handleAction("courier", action, result)
       } catch (error) {
@@ -588,18 +550,18 @@ async function enqueueOrder(data: FsmEnqueueRequest) {
   }
 
   const handleTakeDriverOrder = async (orderId: number) => {
-  const requestData: FsmEnqueueRequest = {
+  const requestData = makeFsmEnqueueRequest({
     entity_type: "trip",
     entity_id: orderId,
     process_name: "trip_assign_driver",
     user_id: parseInt(selectedDriverId),
     target_user_id: parseInt(selectedDriverId),
     target_role: "driver",
-    metadata: {}
-  };
+    metadata: {},
+  });
 
   try {
-    const result = await enqueueOrder(requestData);
+    const result = await enqueueFsmRequest(requestData);
     handleAction("driver", "take_order", result);
     await refreshDriverOrders();
   } catch (error) {
@@ -609,16 +571,16 @@ async function enqueueOrder(data: FsmEnqueueRequest) {
 
 
   const handleCancelDriverOrder = async (orderId: number) => {
-  const requestData: FsmEnqueueRequest = {
+  const requestData = makeFsmEnqueueRequest({
     entity_type: "order",
     entity_id: orderId,
     process_name: "cancel_order", // Универсальный процесс для отмены
     user_id: parseInt(selectedDriverId),
     target_user_id: parseInt(selectedDriverId), // Оба ID совпадают
-  };
+  });
 
   try {
-    const result = await enqueueOrder(requestData);
+    const result = await enqueueFsmRequest(requestData);
 
     // Обновляем локальное состояние
     const order = driverAssignedOrders.find((o) => o.id === orderId);
@@ -648,29 +610,18 @@ const fetchUsers = async () => {
 };
 
   const handleStartTrip = async (tripId: number) => {
-    const data = {
-    entity_type: "order",
-    entity_id: tripId, // это на самом деле order_id
-    process_name: "start_trip",
-    user_id: parseInt(selectedDriverId),
-  }
+    const requestData = makeFsmEnqueueRequest({
+      entity_type: "order",
+      entity_id: tripId, // это на самом деле order_id
+      process_name: "start_trip",
+      user_id: parseInt(selectedDriverId),
+      target_user_id: parseInt(selectedDriverId),
+    })
 
     try {
-      const response = await fetch('/api/proxy/fsm/enqueue', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(data),
-      })
-
-      if (!response.ok) {
-        throw new Error('Network response was not ok')
-      }
-
-      const result = await response.json()
+      const result = await enqueueFsmRequest(requestData)
       handleAction("driver", "start_trip", result)
-    await refreshDriverOrders()
+      await refreshDriverOrders()
 	const order = driverAssignedOrders.find((o) => o.tripId === tripId)
       if (!order) return
 
@@ -724,16 +675,16 @@ const fetchUsers = async () => {
 
   const handleChangeTripState = async (newState: "at_from_locker" | "in_transit" | "at_to_locker") => {
   if (newState === "at_to_locker") {
-    const requestData: FsmEnqueueRequest = {
+    const requestData = makeFsmEnqueueRequest({
       entity_type: "order",
       entity_id: tripId || activeTripId!,
       process_name: "arrive_at_destination", // Процесс для прибытия
       user_id: parseInt(selectedDriverId),
       target_user_id: parseInt(selectedDriverId), // Оба ID совпадают
-    };
+    });
 
     try {
-      const result = await enqueueOrder(requestData);
+      const result = await enqueueFsmRequest(requestData);
       handleAction("driver", "arrive_at_destination", result);
     } catch (error) {
       console.error("Error arriving at destination:", error);
@@ -762,16 +713,16 @@ const fetchUsers = async () => {
 
 
   const handlePlaceParcelInCell = async (orderId: number, cellNumber: string) => {
-  const requestData: FsmEnqueueRequest = {
+  const requestData = makeFsmEnqueueRequest({
     entity_type: "order",
     entity_id: orderId,
     process_name: "open_cell", // Процесс для открытия ячейки
     user_id: parseInt(selectedDriverId),
     target_user_id: parseInt(selectedDriverId), // Оба ID совпадают
-  };
+  });
 
   try {
-    const result = await enqueueOrder(requestData);
+    const result = await enqueueFsmRequest(requestData);
 
     // Обновляем локальное состояние
     const order = [...directOrders, ...reverseOrders].find((o) => o.id === orderId);
@@ -803,27 +754,16 @@ const fetchUsers = async () => {
 
   const handleCancelCourierOrder = async (orderId: number) => {
     setCourierMessage(null); // Сбрасываем предыдущее сообщение
-    const data = {
+    const requestData = makeFsmEnqueueRequest({
       entity_type: "order",
       entity_id: orderId,
       process_name: "cancel_order",
       user_id: parseInt(selectedCourierId),
-    }
+      target_user_id: parseInt(selectedCourierId),
+    })
 
     try {
-      const response = await fetch('/api/proxy/fsm/enqueue', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(data),
-      })
-
-      if (!response.ok) {
-        throw new Error('Network response was not ok')
-      }
-
-      const result = await response.json()
+      const result = await enqueueFsmRequest(requestData)
       setCourierMessage(result.message || 'Заказ отменен');
 
       // Обновляем локальное состояние

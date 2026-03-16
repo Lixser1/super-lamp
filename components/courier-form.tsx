@@ -5,7 +5,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { fetchOrdersByCourier } from "@/lib/api"
+import { Input } from "@/components/ui/input"
+import { fetchOrdersByCourier, enqueueFsmRequest, makeFsmEnqueueRequest } from "@/lib/api"
 import { useEffect, useState } from "react"
 
 interface CourierFormProps {
@@ -43,6 +44,7 @@ export function CourierForm({
   // Локальное состояние для заказов курьера
   const [assignedOrders, setAssignedOrders] = useState<any[]>([]);
   const [courierOrdersFilter, setCourierOrdersFilter] = useState<"all" | "active" | "archive">("active");
+  const [pinCodes, setPinCodes] = useState<{ [orderId: number]: string }>({});
 
   // Загружаем заказы при изменении selectedCourierId
   useEffect(() => {
@@ -67,9 +69,54 @@ export function CourierForm({
     return true;
   });
 
+  // Функция для проверки PIN-кода
+  const handleVerifyPin = async (orderId: number) => {
+    const pin = pinCodes[orderId];
+    if (!pin) {
+      alert(language === "ru" ? "Введите PIN-код" : "Enter PIN code");
+      return;
+    }
+
+    const requestData = makeFsmEnqueueRequest({
+      entity_type: "order",
+      entity_id: orderId,
+      process_name: "confirm_courier2_delivery",
+      user_id: parseInt(selectedCourierId),
+      target_user_id: parseInt(selectedCourierId),
+      user_role: "courier",
+      metadata: {
+        pin: pin,
+      },
+    });
+
+    try {
+      const result = await enqueueFsmRequest(requestData);
+      // Обновить статус заказа или показать сообщение
+      console.log("PIN verification result:", result);
+      // Можно добавить логику обновления assignedOrders или показать сообщение
+    } catch (error) {
+      console.error("Error verifying PIN:", error);
+    }
+  };
+
   // Функция для рендера кнопок действий
   const renderCourierActionButtons = (order: any) => (
-    <div className="flex gap-2">
+    <div className="flex gap-2 flex-col">
+      <div className="flex gap-2">
+        <Input
+          type="text"
+          placeholder={language === "ru" ? "PIN-код" : "PIN code"}
+          value={pinCodes[order.id] || ""}
+          onChange={(e) => setPinCodes(prev => ({ ...prev, [order.id]: e.target.value }))}
+          className="w-20"
+        />
+        <Button
+          size="sm"
+          onClick={() => handleVerifyPin(order.id)}
+        >
+          {language === "ru" ? "Проверить PIN" : "Verify PIN"}
+        </Button>
+      </div>
       <Button
         size="sm"
         variant="outline"
