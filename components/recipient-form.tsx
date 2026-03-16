@@ -6,35 +6,17 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { fetchAccessCodeView } from "@/lib/api";
+import { fetchAccessCodeView, fetchOrderTrack } from "@/lib/api";
+import { useState } from "react";
 
 interface RecipientFormProps {
   selectedRecipientId: string;
   setSelectedRecipientId: (id: string) => void;
-  recipientOrderId: string;
-  setRecipientOrderId: (id: string) => void;
-  recipientTracking: Array<{ status: string; date: string; time: string }>;
-  setRecipientTracking: (tracking: Array<{ status: string; date: string; time: string }>) => void;
-  recipientOrderDetails: {
-    id: number;
-    locker: string;
-    cell: string;
-    recipientDelivery: "self" | "courier";
-    currentStatus: string;
-  } | null;
-  setRecipientOrderDetails: (details: {
-    id: number;
-    locker: string;
-    cell: string;
-    recipientDelivery: "self" | "courier";
-    currentStatus: string;
-  } | null) => void;
   mode: "create" | "run";
   t: any;
   language: string;
   users: Array<{ id: number; name: string; role_name: string }>;
-  handleRecipientLookup: () => void;
-  handleAction: (role: string, action: string, extraData?: any) => void;
+  addLog: (log: any) => void;
   highlightedAction: string | null;
 }
 
@@ -42,20 +24,61 @@ interface RecipientFormProps {
 export function RecipientForm({
   selectedRecipientId,
   setSelectedRecipientId,
-  recipientOrderId,
-  setRecipientOrderId,
-  recipientTracking,
-  setRecipientTracking,
-  recipientOrderDetails,
-  setRecipientOrderDetails,
   mode,
   t,
   language,
   users,
-  handleRecipientLookup,
-  handleAction,
+  addLog,
   highlightedAction,
 }: RecipientFormProps) {
+
+  const [recipientOrderId, setRecipientOrderId] = useState("")
+  const [recipientTracking, setRecipientTracking] = useState<Array<{ status: string; isCurrent: boolean; date?: string; time?: string }>>([])
+  const [recipientOrderDetails, setRecipientOrderDetails] = useState<{
+    id: number;
+    locker: string;
+    cell: string;
+    recipientDelivery: "self" | "courier";
+    currentStatus: string;
+  } | null>(null)
+
+  const handleRecipientLookup = async () => {
+    if (!recipientOrderId) return;
+
+    try {
+      const data = await fetchOrderTrack(parseInt(recipientOrderId));
+
+      // Обработка path: фильтруем статусы с is_completed или is_current
+      const tracking = data.path
+        .filter((item: any) => item.is_completed || item.is_current)
+        .map((item: any) => ({
+          status: item.status,
+          isCurrent: item.is_current,
+          date: '', // Пустые, так как в данных нет даты
+          time: ''
+        }));
+
+      // Обновляем детали заказа
+      setRecipientOrderDetails({
+        id: data.order_id,
+        locker: '', // Нет в данных
+        cell: '', // Нет в данных
+        recipientDelivery: data.delivery_type === 'courier' ? 'courier' : 'self', // Предполагаем на основе delivery_type
+        currentStatus: data.current_status
+      });
+
+      setRecipientTracking(tracking);
+      addLog({
+        role: "recipient",
+        action: "lookup_order",
+        order_id: parseInt(recipientOrderId)
+      });
+    } catch (error) {
+      console.error('Error fetching order track:', error);
+      setRecipientTracking([]);
+      setRecipientOrderDetails(null);
+    }
+  };
 
     
   // Функция для отправки запроса на подтверждение доставки
@@ -88,10 +111,20 @@ export function RecipientForm({
       }
 
       const result = await response.json();
-      handleAction("recipient", "confirm_delivery", { order_id: recipientOrderDetails.id, result });
+      addLog({
+        role: "recipient",
+        action: "confirm_delivery",
+        order_id: recipientOrderDetails.id,
+        result
+      });
     } catch (error) {
       console.error('Error confirming delivery:', error);
-      handleAction("recipient", "confirm_delivery_error", { order_id: recipientOrderDetails.id, error: String(error) });
+      addLog({
+        role: "recipient",
+        action: "confirm_delivery_error",
+        order_id: recipientOrderDetails.id,
+        error: String(error)
+      });
     }
   };
 
@@ -200,19 +233,15 @@ export function RecipientForm({
                   <TableHeader>
                     <TableRow>
                       <TableHead>{t.recipient.status}</TableHead>
-                      <TableHead>{t.recipient.date}</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {recipientTracking.map((track, idx) => (
                       <TableRow key={idx}>
                         <TableCell>
-                          <Badge variant={idx === recipientTracking.length - 1 ? "default" : "secondary"}>
+                          <Badge variant={track.isCurrent ? "default" : "secondary"}>
                             {track.status}
                           </Badge>
-                        </TableCell>
-                        <TableCell>
-                          {track.date} {track.time}
                         </TableCell>
                       </TableRow>
                     ))}
@@ -235,7 +264,11 @@ export function RecipientForm({
             recipientOrderDetails.recipientDelivery === "self" && (
               <Button
                 onClick={() =>
-                  handleAction("recipient", "pickup_from_locker", { order_id: recipientOrderDetails.id })
+                  addLog({
+                    role: "recipient",
+                    action: "pickup_from_locker",
+                    order_id: recipientOrderDetails.id
+                  })
                 }
                 className={highlightedAction === "pickup_from_locker" ? "animate-pulse" : ""}
               >

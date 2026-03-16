@@ -112,3 +112,35 @@ export async function fetchFsmEntityActions(entityType: string, entityId: number
 
   return response.json();
 }
+
+// Получение истории действий для конкретной сущности
+export async function fetchFsmEntityHistory(entityType: string, entityId: number) {
+  const response = await fetch(`/api/proxy/fsm/emulator/entities/${entityType}/${entityId}/history`, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Request fetchFsmEntityHistory failed: ${response.status} ${response.statusText}`);
+  }
+
+  return response.json();
+}
+
+// Получение трекинга заказа
+export async function fetchOrderTrack(order_id: number) {
+  const response = await fetch(`/api/proxy/orders/${order_id}/track`, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Request fetchOrderTrack failed: ${response.status} ${response.statusText}`);
+  }
+
+  return response.json();
+}

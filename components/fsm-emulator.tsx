@@ -6,11 +6,10 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Button } from "@/components/ui/button"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
-import { fetchFsmEntities, fetchFsmEntityActions } from "@/lib/api"
+import { fetchFsmEntities, fetchFsmEntityActions, fetchFsmEntityHistory } from "@/lib/api"
 
 interface FSMEmulatorProps {
   addLog: (log: any) => void
-  highlightedAction?: string | null
 }
 
 interface FsmEntity {
@@ -28,12 +27,30 @@ interface EntityActions {
   available_actions: string[]
 }
 
-export function FSMEmulator({ addLog, highlightedAction }: FSMEmulatorProps) {
+interface HistoryEntry {
+  id: number
+  action_name: string
+  from_state: string
+  to_state: string
+  user_id: number
+  created_at: string
+}
+
+interface EntityHistory {
+  entity_type: string
+  entity_id: number
+  history: HistoryEntry[]
+  count: number
+}
+
+export function FSMEmulator({ addLog }: FSMEmulatorProps) {
   const [entities, setEntities] = useState<FsmEntity[]>([])
   const [selectedEntity, setSelectedEntity] = useState<FsmEntity | null>(null)
   const [selectedAction, setSelectedAction] = useState<Record<number, string>>({})
   const [entityActions, setEntityActions] = useState<Record<number, EntityActions>>({})
+  const [entityHistory, setEntityHistory] = useState<Record<number, EntityHistory>>({})
   const [loadingActions, setLoadingActions] = useState<Record<number, boolean>>({})
+  const [loadingHistory, setLoadingHistory] = useState<Record<number, boolean>>({})
   const [filterType, setFilterType] = useState<string>("all")
   const [filterState, setFilterState] = useState<string>("all")
   const [historyOpen, setHistoryOpen] = useState(false)
@@ -72,10 +89,26 @@ export function FSMEmulator({ addLog, highlightedAction }: FSMEmulatorProps) {
     }
   }
 
+  // Загрузка истории для сущности
+  const loadEntityHistory = async (entity: FsmEntity) => {
+    if (entityHistory[entity.id]) return // Уже загружено
+
+    setLoadingHistory((prev) => ({ ...prev, [entity.id]: true }))
+    try {
+      const data = await fetchFsmEntityHistory(entity.entity_type, entity.id)
+      setEntityHistory((prev) => ({ ...prev, [entity.id]: data }))
+    } catch (error) {
+      console.error("Error loading entity history:", error)
+    } finally {
+      setLoadingHistory((prev) => ({ ...prev, [entity.id]: false }))
+    }
+  }
+
   const handleOpenChange = (open: boolean) => {
     setHistoryOpen(open)
     if (open && selectedEntity) {
       loadEntityActions(selectedEntity)
+      loadEntityHistory(selectedEntity)
     }
   }
 
@@ -163,6 +196,7 @@ export function FSMEmulator({ addLog, highlightedAction }: FSMEmulatorProps) {
                     setSelectedEntity(entity)
                     setHistoryOpen(true)
                     loadEntityActions(entity)
+                    loadEntityHistory(entity)
                   }}
                 >
                   <TableCell className="font-medium">{entity.entity_type}</TableCell>
@@ -213,27 +247,40 @@ export function FSMEmulator({ addLog, highlightedAction }: FSMEmulatorProps) {
         </Table>
 
         <Dialog open={historyOpen} onOpenChange={handleOpenChange}>
-          <DialogContent>
+          <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>
-                Entity Details - {selectedEntity?.entity_type} #{selectedEntity?.id}
+                History - {selectedEntity?.entity_type} #{selectedEntity?.id}
               </DialogTitle>
             </DialogHeader>
-            <div className="space-y-2">
-              <p><strong>Status:</strong> {selectedEntity?.status}</p>
-              <p><strong>Description:</strong> {selectedEntity?.description}</p>
-              <p><strong>Created:</strong> {selectedEntity?.created_at ? new Date(selectedEntity.created_at).toLocaleString() : "-"}</p>
-              {entityActions[selectedEntity?.id || 0]?.available_actions && (
-                <div className="mt-4">
-                  <strong>Available Actions:</strong>
-                  <ul className="mt-2 list-disc list-inside">
-                    {entityActions[selectedEntity?.id || 0].available_actions.map((action) => (
-                      <li key={action} className="text-sm">{action}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-            </div>
+            {loadingHistory[selectedEntity?.id || 0] ? (
+              <p className="text-muted-foreground">Loading history...</p>
+            ) : entityHistory[selectedEntity?.id || 0]?.history ? (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Action</TableHead>
+                    <TableHead>From State</TableHead>
+                    <TableHead>To State</TableHead>
+                    <TableHead>Created At</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {entityHistory[selectedEntity?.id || 0].history.map((entry) => (
+                    <TableRow key={entry.id}>
+                      <TableCell className="font-medium">{entry.action_name}</TableCell>
+                      <TableCell>{entry.from_state}</TableCell>
+                      <TableCell>{entry.to_state}</TableCell>
+                      <TableCell className="text-sm text-muted-foreground">
+                        {entry.created_at ? new Date(entry.created_at).toLocaleString() : "-"}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            ) : (
+              <p className="text-muted-foreground">No history available</p>
+            )}
           </DialogContent>
         </Dialog>
       </CardContent>

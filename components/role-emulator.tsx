@@ -13,6 +13,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { FSMEmulator } from "@/components/fsm-emulator"
 import { useLanguage } from "@/lib/language-context"
+import { fetchOrderTrack } from "@/lib/api"
 import {
   mockLockers,
   mockOrders,
@@ -121,16 +122,6 @@ const [isLoadingUsers, setIsLoadingUsers] = useState(false);
   const [delaySeconds, setDelaySeconds] = useState("2")
   const [totalSteps, setTotalSteps] = useState(5)
   const { t, language } = useLanguage()
-
-  const [recipientOrderId, setRecipientOrderId] = useState("")
-  const [recipientTracking, setRecipientTracking] = useState<Array<{ status: string; date: string; time: string }>>([])
-  const [recipientOrderDetails, setRecipientOrderDetails] = useState<{
-    id: number
-    locker: string
-    cell: string
-    recipientDelivery: "self" | "courier"
-    currentStatus: string
-  } | null>(null)
 
   const [courierOrdersFilter, setCourierOrdersFilter] = useState<"all" | "active" | "archive">("active")
 const [isRefreshingCourier, setIsRefreshingCourier] = useState(false)
@@ -946,18 +937,37 @@ const filteredAvailableOrders = availableOrders.filter((o: any) => {
     }
   }
 
-  const handleRecipientLookup = () => {
-    const orderId = Number.parseInt(recipientOrderId)
-    const tracking = mockOrderTracking[orderId]
-    const details = mockOrderDetails[orderId]
+  const handleRecipientLookup = async () => {
+    if (!recipientOrderId) return;
 
-    if (tracking && details) {
-      setRecipientTracking(tracking)
-      setRecipientOrderDetails(details)
-      handleAction("recipient", "lookup_order", { order_id: orderId })
-    } else {
-      setRecipientTracking([])
-      setRecipientOrderDetails(null)
+    try {
+      const data = await fetchOrderTrack(parseInt(recipientOrderId));
+
+      // Обработка path: фильтруем статусы с is_completed или is_current
+      const tracking = data.path
+        .filter((item: any) => item.is_completed || item.is_current)
+        .map((item: any) => ({
+          status: item.status,
+          isCurrent: item.is_current,
+          date: '', // Пустые, так как в данных нет даты
+          time: ''
+        }));
+
+      // Обновляем детали заказа
+      setRecipientOrderDetails({
+        id: data.order_id,
+        locker: '', // Нет в данных
+        cell: '', // Нет в данных
+        recipientDelivery: data.delivery_type === 'courier' ? 'courier' : 'self', // Предполагаем на основе delivery_type
+        currentStatus: data.current_status
+      });
+
+      setRecipientTracking(tracking);
+      handleAction("recipient", "lookup_order", { order_id: parseInt(recipientOrderId) });
+    } catch (error) {
+      console.error('Error fetching order track:', error);
+      setRecipientTracking([]);
+      setRecipientOrderDetails(null);
     }
   }
 
@@ -1187,20 +1197,14 @@ const filteredAvailableOrders = availableOrders.filter((o: any) => {
   <RecipientForm
     selectedRecipientId={selectedRecipientId}
     setSelectedRecipientId={setSelectedRecipientId}
-    recipientOrderId={recipientOrderId}
-    setRecipientOrderId={setRecipientOrderId}
-    recipientTracking={recipientTracking}
-    setRecipientTracking={setRecipientTracking}
-    recipientOrderDetails={recipientOrderDetails}
-    setRecipientOrderDetails={setRecipientOrderDetails}
     mode={mode}
     t={t}
     language={language}
     users={users}
-    handleRecipientLookup={handleRecipientLookup}
-    handleAction={handleAction}
+    addLog={addLog}
     highlightedAction={highlightedAction}
   />
+
           </TabsContent>
 
           <TabsContent value="courier" className="mt-0">
