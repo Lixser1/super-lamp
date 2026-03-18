@@ -55,6 +55,8 @@ export function FSMEmulator({ addLog }: FSMEmulatorProps) {
   const [filterState, setFilterState] = useState<string>("all")
   const [historyOpen, setHistoryOpen] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
+  const [availableTypes, setAvailableTypes] = useState<string[]>([])
+  const [availableStatuses, setAvailableStatuses] = useState<string[]>([])
 
   // Загрузка данных при изменении фильтров
   useEffect(() => {
@@ -63,6 +65,18 @@ export function FSMEmulator({ addLog }: FSMEmulatorProps) {
       try {
         const data = await fetchFsmEntities(filterType, filterState, 50)
         setEntities(data)
+
+        // Извлекаем уникальные типы сущностей
+        const types = new Set<string>()
+        const statuses = new Set<string>()
+        
+        data.forEach((entity) => {
+          if (entity.entity_type) types.add(entity.entity_type)
+          if (entity.status) statuses.add(entity.status)
+        })
+
+        setAvailableTypes(Array.from(types).sort())
+        setAvailableStatuses(Array.from(statuses).sort())
       } catch (error) {
         console.error("Error loading FSM entities:", error)
         setEntities([])
@@ -143,9 +157,11 @@ export function FSMEmulator({ addLog }: FSMEmulatorProps) {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Types</SelectItem>
-              <SelectItem value="order">Order</SelectItem>
-              <SelectItem value="stage_order">Stage Order</SelectItem>
-              <SelectItem value="trip">Trip</SelectItem>
+              {availableTypes.map((type) => (
+                <SelectItem key={type} value={type}>
+                  {type}
+                </SelectItem>
+              ))}
             </SelectContent>
           </Select>
           <Select value={filterState} onValueChange={setFilterState}>
@@ -154,10 +170,11 @@ export function FSMEmulator({ addLog }: FSMEmulatorProps) {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All States</SelectItem>
-              <SelectItem value="created">Created</SelectItem>
-              <SelectItem value="reserved">Reserved</SelectItem>
-              <SelectItem value="assigned">Assigned</SelectItem>
-              <SelectItem value="in_progress">In Progress</SelectItem>
+              {availableStatuses.map((status) => (
+                <SelectItem key={status} value={status}>
+                  {status}
+                </SelectItem>
+              ))}
             </SelectContent>
           </Select>
         </div>
