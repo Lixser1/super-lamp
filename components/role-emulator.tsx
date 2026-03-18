@@ -28,6 +28,7 @@ import { ClientForm } from "./client-form"
 import { CourierForm } from "./courier-form";
 import { DriverForm } from "./driver-form"
 import { RecipientForm } from "./recipient-form"
+import { OperatorForm } from "./operator-form"
 interface RoleEmulatorProps {
   addLog: (log: any) => void
   currentTest: any
@@ -97,11 +98,6 @@ const [isLoadingUsers, setIsLoadingUsers] = useState(false);
   const [placedParcels, setPlacedParcels] = useState<{
     [cellNumber: string]: { orderId: number; originalSize: string }
   }>({})
-
-  const [expandedLockers, setExpandedLockers] = useState<number[]>([])
-  const [lockerOrders, setLockerOrders] = useState<{ [key: number]: any[] }>({})
-  const [selectedCouriers, setSelectedCouriers] = useState<{ [key: number]: string }>({})
-  const [selectedDrivers, setSelectedDrivers] = useState<{ [key: number]: string }>({})
 
   const [currentStep, setCurrentStep] = useState(0)
   const [isPlaying, setIsPlaying] = useState(false)
@@ -792,49 +788,6 @@ const filteredAvailableOrders = availableOrders.filter((o: any) => {
 });
 
 
-  const toggleLocker = (lockerId: number) => {
-    if (expandedLockers.includes(lockerId)) {
-      setExpandedLockers(expandedLockers.filter((id) => id !== lockerId))
-    } else {
-      setExpandedLockers([...expandedLockers, lockerId])
-      const orders = mockOrders.filter((o) => o.lockerId === lockerId && o.status === "assigned_to_pudo")
-      setLockerOrders({ ...lockerOrders, [lockerId]: orders })
-    }
-  }
-
-  const handleAssignCourier = (orderId: number, lockerId: number) => {
-    const courierId = selectedCouriers[orderId]
-    if (courierId) {
-      handleAction("operator", "assign_courier", { order_id: orderId, courier_id: courierId })
-    }
-  }
-
-  const handleAssignDriver = (tripId: number) => {
-    const driverId = selectedDrivers[tripId]
-    if (driverId) {
-      setDriverAssignedOrders(
-        driverAssignedOrders.map((order) =>
-          order.tripId === tripId
-            ? { ...order, driverId: Number.parseInt(driverId), status: "assigned_by_operator_driver" }
-            : order,
-        ),
-      )
-      handleAction("operator", "assign_driver", { trip_id: tripId, driver_id: driverId })
-    }
-  }
-
-  const handleRemoveCourier = (orderId: number) => {
-    setAssignedOrders(assignedOrders.map((order) => (order.id === orderId ? { ...order, courierId: null } : order)))
-    handleAction("operator", "remove_courier", { order_id: orderId })
-  }
-
-  const handleRemoveDriver = (tripId: number) => {
-    setDriverAssignedOrders(
-      driverAssignedOrders.map((order) => (order.tripId === tripId ? { ...order, driverId: null } : order)),
-    )
-    handleAction("operator", "remove_driver", { trip_id: tripId })
-  }
-
   const fetchDriverExchangeOrders = async (city: string) => {
   try {
     const cityParam = city === "МСК" ? "МСК" : "СПБ";
@@ -848,14 +801,6 @@ const filteredAvailableOrders = availableOrders.filter((o: any) => {
     return [];
   }
 };
-
-  const calculateWaitingTime = (createdDate: Date) => {
-    const now = new Date()
-    const diffMs = now.getTime() - createdDate.getTime()
-    const diffHours = Math.floor(diffMs / (1000 * 60 * 60))
-    const diffMinutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60))
-    return { hours: diffHours, minutes: diffMinutes }
-  }
 
   const handleStepForward = () => {
     if (currentStep < totalSteps - 1) {
@@ -1223,253 +1168,12 @@ const filteredAvailableOrders = availableOrders.filter((o: any) => {
           </TabsContent>
 
           <TabsContent value="operator" className="mt-0">
-            <Card>
-              <CardHeader>
-                <CardTitle>{t.operator.title}</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-6">
-                <div>
-                  <h3 className="font-semibold mb-3">{t.operator.tripFeed}</h3>
-                  <div className="border rounded-lg overflow-hidden">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>{t.operator.tripId}</TableHead>
-                          <TableHead>{t.operator.locker}</TableHead>
-                          <TableHead>{t.operator.status}</TableHead>
-                          <TableHead>{t.operator.waitingTime}</TableHead>
-                          <TableHead>{t.operator.driver}</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {/* Sort by waiting time (newest first) */}
-                        {[...driverAvailableOrders, ...driverAssignedOrders]
-                          .filter((trip) => trip.tripStatus !== "completed")
-                          .sort((a, b) => {
-                            // Mock creation dates for sorting
-                            const dateA = new Date(2025, 0, 20, 10, 0)
-                            const dateB = new Date(2025, 0, 20, 11, 0)
-                            return dateB.getTime() - dateA.getTime()
-                          })
-                          .map((trip) => {
-                            const locker = mockLockers.find((l) => l.id === trip.lockerId)
-                            const waitTime = calculateWaitingTime(new Date(2025, 0, 20, 10, 0))
-                            const hasDrive = trip.driverId !== null && trip.driverId !== undefined
-
-                            return (
-                              <TableRow key={trip.tripId}>
-                                <TableCell>{trip.tripId}</TableCell>
-                                <TableCell>{locker?.address}</TableCell>
-                                <TableCell>
-                                  <Badge variant={trip.status === "available_for_driver" ? "secondary" : "default"}>
-                                    {trip.status === "available_for_driver"
-                                      ? language === "ru"
-                                        ? "Доступен"
-                                        : "Available"
-                                      : trip.status === "taken_from_exchange_driver"
-                                        ? language === "ru"
-                                          ? "Взят с биржи"
-                                          : "Taken from exchange"
-                                        : language === "ru"
-                                          ? "Назначен оператором"
-                                          : "Assigned by operator"}
-                                  </Badge>
-                                </TableCell>
-                                <TableCell>
-                                  {waitTime.hours > 0 && `${waitTime.hours}${t.operator.hours} `}
-                                  {waitTime.minutes}
-                                  {t.operator.minutes}
-                                </TableCell>
-                                <TableCell className="space-x-2">
-                                  {hasDrive ? (
-                                    <div className="flex items-center gap-2">
-                                      <span className="text-sm">
-                                        {language === "ru" ? "Водитель" : "Driver"} #{trip.driverId}
-                                      </span>
-                                      <Button
-                                        size="sm"
-                                        variant="outline"
-                                        onClick={() => handleRemoveDriver(trip.tripId)}
-                                      >
-                                        {t.operator.remove}
-                                      </Button>
-                                    </div>
-                                  ) : (
-                                    <div className="flex items-center gap-2">
-                                      <Select
-                                        value={selectedDrivers[trip.tripId] || ""}
-                                        onValueChange={(v) =>
-                                          setSelectedDrivers({ ...selectedDrivers, [trip.tripId]: v })
-                                        }
-                                      >
-                                        <SelectTrigger className="w-40">
-                                          <SelectValue placeholder={t.operator.selectDriver} />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                          {[200, 201, 202, 203, 204].map((driverId) => (
-                                            <SelectItem key={driverId} value={driverId.toString()}>
-                                              {language === "ru" ? "Водитель" : "Driver"} #{driverId}
-                                            </SelectItem>
-                                          ))}
-                                        </SelectContent>
-                                      </Select>
-                                      <Button
-                                        size="sm"
-                                        onClick={() => handleAssignDriver(trip.tripId)}
-                                        disabled={!selectedDrivers[trip.tripId]}
-                                      >
-                                        {t.operator.assign}
-                                      </Button>
-                                    </div>
-                                  )}
-                                </TableCell>
-                              </TableRow>
-                            )
-                          })}
-                      </TableBody>
-                    </Table>
-                  </div>
-                </div>
-
-                <div>
-                  <h3 className="font-semibold mb-3">{t.operator.lockersTable}</h3>
-                  <div className="border rounded-lg overflow-hidden">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead className="w-12"></TableHead>
-                          <TableHead>{t.operator.locker}</TableHead>
-                          <TableHead>{t.operator.waitingCourier}</TableHead>
-                          <TableHead>{t.operator.assignedCouriers}</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {mockLockers
-                          .map((locker) => {
-                            const waitingOrders = mockOrders.filter(
-                              (o) => o.lockerId === locker.id && o.status === "assigned_to_pudo" && !o.courierId,
-                            )
-                            const assignedCouriers = new Set(
-                              mockOrders.filter((o) => o.lockerId === locker.id && o.courierId).map((o) => o.courierId),
-                            ).size
-                            return { locker, waitingOrders, assignedCouriers }
-                          })
-                          .sort((a, b) => b.waitingOrders.length - a.waitingOrders.length)
-                          .map(({ locker, waitingOrders, assignedCouriers }) => {
-                            const isExpanded = expandedLockers.includes(locker.id)
-
-                            return (
-                              <>
-                                <TableRow key={locker.id}>
-                                  <TableCell>
-                                    <Button variant="ghost" size="sm" onClick={() => toggleLocker(locker.id)}>
-                                      {isExpanded ? "▼" : "▶"}
-                                    </Button>
-                                  </TableCell>
-                                  <TableCell>
-                                    {locker.id} / {locker.address}
-                                  </TableCell>
-                                  <TableCell>{waitingOrders.length}</TableCell>
-                                  <TableCell>{assignedCouriers}</TableCell>
-                                </TableRow>
-                                {isExpanded && lockerOrders[locker.id] && (
-                                  <TableRow>
-                                    <TableCell colSpan={4} className="bg-muted/50">
-                                      <div className="p-4">
-                                        <Table>
-                                          <TableHeader>
-                                            <TableRow>
-                                              <TableHead>{t.operator.orderId}</TableHead>
-                                              <TableHead>{t.operator.cell}</TableHead>
-                                              <TableHead>{t.operator.status}</TableHead>
-                                              <TableHead>{t.operator.waitingTime}</TableHead>
-                                              <TableHead>{t.operator.courier}</TableHead>
-                                            </TableRow>
-                                          </TableHeader>
-                                          <TableBody>
-                                            {lockerOrders[locker.id].map((order) => {
-                                              const waitTime = calculateWaitingTime(new Date(2025, 0, 20, 9, 0))
-                                              const hasCourier =
-                                                order.courierId !== null && order.courierId !== undefined
-
-                                              return (
-                                                <TableRow key={order.id}>
-                                                  <TableCell>{order.id}</TableCell>
-                                                  <TableCell>{order.cell}</TableCell>
-                                                  <TableCell>
-                                                    <Badge variant="secondary">
-                                                      {language === "ru" ? "Ожидает курьера" : "Waiting for courier"}
-                                                    </Badge>
-                                                  </TableCell>
-                                                  <TableCell>
-                                                    {waitTime.hours > 0 && `${waitTime.hours}${t.operator.hours} `}
-                                                    {waitTime.minutes}
-                                                    {t.operator.minutes}
-                                                  </TableCell>
-                                                  <TableCell className="space-x-2">
-                                                    {hasCourier ? (
-                                                      <div className="flex items-center gap-2">
-                                                        <span className="text-sm">
-                                                          {language === "ru" ? "Курьер" : "Courier"} #{order.courierId}
-                                                        </span>
-                                                        <Button
-                                                          size="sm"
-                                                          variant="outline"
-                                                          onClick={() => handleRemoveCourier(order.id)}
-                                                        >
-                                                          {t.operator.remove}
-                                                        </Button>
-                                                      </div>
-                                                    ) : (
-                                                      <div className="flex items-center gap-2">
-                                                        <Select
-                                                          value={selectedCouriers[order.id] || ""}
-                                                          onValueChange={(v) =>
-                                                            setSelectedCouriers({ ...selectedCouriers, [order.id]: v })
-                                                          }
-                                                        >
-                                                          <SelectTrigger className="w-40">
-                                                            <SelectValue placeholder={t.operator.selectCourier} />
-                                                          </SelectTrigger>
-                                                          <SelectContent>
-                                                            {mockCouriers.map((courier) => (
-                                                              <SelectItem
-                                                                key={courier.id}
-                                                                value={courier.id.toString()}
-                                                              >
-                                                                {courier.name}
-                                                              </SelectItem>
-                                                            ))}
-                                                          </SelectContent>
-                                                        </Select>
-                                                        <Button
-                                                          size="sm"
-                                                          onClick={() => handleAssignCourier(order.id, locker.id)}
-                                                          disabled={!selectedCouriers[order.id]}
-                                                        >
-                                                          {t.operator.assign}
-                                                        </Button>
-                                                      </div>
-                                                    )}
-                                                  </TableCell>
-                                                </TableRow>
-                                              )
-                                            })}
-                                          </TableBody>
-                                        </Table>
-                                      </div>
-                                    </TableCell>
-                                  </TableRow>
-                                )}
-                              </>
-                            )
-                          })}
-                      </TableBody>
-                    </Table>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
+            <OperatorForm
+              addLog={addLog}
+              driverAvailableOrders={driverAvailableOrders}
+              driverAssignedOrders={driverAssignedOrders}
+              setDriverAssignedOrders={setDriverAssignedOrders}
+            />
           </TabsContent>
 
           <TabsContent value="fsm" className="mt-0">
