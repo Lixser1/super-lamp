@@ -1,68 +1,111 @@
 "use client"
-import {useEffect} from "react"
+import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Badge } from "@/components/ui/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { useLanguage } from "@/lib/language-context"
+import { fetchOrdersByClient, fetchUsers, fetchFsmUserErrors, enqueueFsmRequest, makeFsmEnqueueRequest } from "@/lib/api"
 
-interface ClientFormProps {
-  selectedClientId: string
-  setSelectedClientId: (id: string) => void
-  recipientUserId: string
-  setRecipientUserId: (id: string) => void
-  parcelType: string
-  setParcelType: (type: string) => void
-  cellSize: string
-  setCellSize: (size: string) => void
-  senderDelivery: string
-  setSenderDelivery: (delivery: string) => void
-  recipientDelivery: string
-  setRecipientDelivery: (delivery: string) => void
-  clientOrders: Array<{
+export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
+  const [selectedClientId, setSelectedClientId] = useState<string>("")
+  const [recipientUserId, setRecipientUserId] = useState<string>("")
+  const [parcelType, setParcelType] = useState<string>("")
+  const [cellSize, setCellSize] = useState<string>("")
+  const [senderDelivery, setSenderDelivery] = useState<string>("")
+  const [recipientDelivery, setRecipientDelivery] = useState<string>("")
+  const [clientOrders, setClientOrders] = useState<Array<{
     id: number
     description: string
     status: string
     canCancel: boolean
     isLoading?: boolean
-  }>
-  setClientOrders: React.Dispatch<React.SetStateAction<any[]>>
-  orderMessage: string | null
-  setOrderMessage: (message: string | null) => void
-  language: string
-  t: any
-  addLog: (log: any) => void
-  users: Array<{ id: number; name: string; role_name: string; city: string | null }>;
-}
+  }>>([])
+  const [orderMessage, setOrderMessage] = useState<string | null>(null)
+  const [users, setUsers] = useState<Array<{ id: number; name: string; role_name: string; city: string | null }>>([])
+  const [isLoadingUsers, setIsLoadingUsers] = useState(false)
+  const [isRefreshingClient, setIsRefreshingClient] = useState(false)
+  const { t, language } = useLanguage()
 
-export function ClientForm({
-  selectedClientId,
-  setSelectedClientId,
-  recipientUserId,
-  setRecipientUserId,
-  parcelType,
-  setParcelType,
-  cellSize,
-  setCellSize,
-  senderDelivery,
-  setSenderDelivery,
-  recipientDelivery,
-  setRecipientDelivery,
-  clientOrders,
-  setClientOrders,
-  orderMessage,
-  setOrderMessage,
-  language,
-  t,
-  addLog,
-  users,
-}: ClientFormProps) {
+  const loadUsers = async () => {
+    setIsLoadingUsers(true);
+    try {
+      const data = await fetchUsers();
+      setUsers(data);
+    } catch (error) {
+      console.error('Error fetching users:', error);
+    } finally {
+      setIsLoadingUsers(false);
+    }
+  };
+
+  const loadClientOrders = async () => {
+    if (isRefreshingClient) return;
+    setIsRefreshingClient(true);
+    try {
+      const orders = await fetchOrdersByClient(selectedClientId);
+      const processedOrders = orders.map((order: any) => ({
+        id: order.id,
+        description: order.description || `Order ${order.id}`,
+        status: order.status,
+        canCancel: order.status !== 'cancelled' && order.status !== 'completed',
+      }));
+      setClientOrders(processedOrders);
+    } catch (error) {
+      console.error('Error loading client orders:', error);
+    } finally {
+      setIsRefreshingClient(false);
+    }
+  };
+
+  const loadClientFsmError = async () => {
+    if (!selectedClientId) return null;
+
+    try {
+      const result: any = await fetchFsmUserErrors(parseInt(selectedClientId), 1);
+      if (result?.success && Array.isArray(result.errors)) {
+        const err = result.errors.find((e: any) => e.process_name === "create_order_request");
+        return err?.last_error ?? null;
+      }
+    } catch (error) {
+      console.error('Error loading client FSM errors:', error);
+    }
+    return null;
+  };
+  useEffect(() => {
+    loadUsers();
+  }, []);
+
+  useEffect(() => {
+    if (selectedClientId) {
+      setOrderMessage(null);
+      loadClientOrders();
+      loadClientFsmError().then((err) => {
+        setOrderMessage(err);
+      });
+    } else {
+      setOrderMessage(null);
+      setClientOrders([]);
+    }
+  }, [selectedClientId]);
+
+  useEffect(() => {
+    if (!selectedClientId) return;
+
+    const interval = setInterval(() => {
+      loadClientOrders();
+    }, 20000); // 20 seconds
+
+    return () => clearInterval(interval);
+  }, [selectedClientId]);
+
   useEffect(() => {
     if (parcelType === "letter") {
       setCellSize("P")
     }
-  }, [parcelType, setCellSize])
+  }, [parcelType])
 
   const handleCreateOrder = async () => {
   setOrderMessage(null);
@@ -89,7 +132,7 @@ export function ClientForm({
     cell_size: cellSize,
     sender_delivery: senderDelivery,
     recipient_delivery: recipientDelivery,
-    recipient_user_id: recipientUserId,
+    recipient_user_id: parseInt(recipientUserId),
   };
 
   try {
@@ -124,51 +167,42 @@ export function ClientForm({
 
 
   const handleCancelClientOrder = async (orderId: number) => {
-    const data = {
+    const requestData = makeFsmEnqueueRequest({
       entity_type: "order",
       entity_id: orderId,
       process_name: "cancel_order",
       user_id: parseInt(selectedClientId),
-    }
+    });
 
     try {
-      const response = await fetch('/api/proxy/fsm/enqueue', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(data),
-      })
-
-      if (response.status === 404) {
-        setClientOrders(prev =>
-          prev.map(order =>
-            order.id === orderId ? { ...order, status: "cannot_cancel", canCancel: false } : order
-          )
-        )
-        return
-      }
-
-      const result = await response.json()
+        const result = await enqueueFsmRequest(requestData);
 
       if (result.error || result.status === 'error' || result.message?.includes('cannot')) {
         setClientOrders(
           clientOrders.map((order) => (order.id === orderId ? { ...order, status: "cannot_cancel", canCancel: false } : order)),
-        )
-        return
+        );
+        return;
       }
 
       setClientOrders(
         clientOrders.filter((order) => order.id !== orderId)
-      )
+      );
 
       addLog({
         role: "client",
         action: "cancel_order",
         data: result,
-      })
+      });
     } catch (error) {
-      console.error('Error cancelling order:', error)
+      console.error('Error cancelling order:', error);
+      // Handle 404 or other errors
+      if ((error as Error).message?.includes('404')) {
+        setClientOrders(prev =>
+          prev.map(order =>
+            order.id === orderId ? { ...order, status: "cannot_cancel", canCancel: false } : order
+          )
+        );
+      }
     }
   }
 

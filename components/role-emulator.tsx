@@ -13,7 +13,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { FSMEmulator } from "@/components/fsm-emulator"
 import { useLanguage } from "@/lib/language-context"
-import { enqueueFsmRequest, fetchOrderTrack, makeFsmEnqueueRequest } from "@/lib/api"
+import { enqueueFsmRequest, fetchOrderTrack, makeFsmEnqueueRequest, fetchOrdersByClient } from "@/lib/api"
 import {
   mockLockers,
   mockOrders,
@@ -344,9 +344,7 @@ const fetchAllOrders = async () => {
 
 const fetchClientOrdersByUserId = async (userId: string) => {
   try {
-    const response = await fetch(`/api/orders/user/${userId}`);
-    if (!response.ok) throw new Error("Failed to fetch client orders");
-    const orders = await response.json();
+    const orders = await fetchOrdersByClient(userId);
     return orders.map((order: any) => ({
       id: order.id,
       status: order.status,
@@ -1053,28 +1051,7 @@ const filteredAvailableOrders = availableOrders.filter((o: any) => {
 
         <div className="flex-1 overflow-auto p-4">
           <TabsContent value="client" className="mt-0">
-  <ClientForm
-    selectedClientId={selectedClientId}
-    setSelectedClientId={setSelectedClientId}
-    recipientUserId={recipientUserId}
-    setRecipientUserId={setRecipientUserId}
-    parcelType={parcelType}
-    setParcelType={setParcelType}
-    cellSize={cellSize}
-    setCellSize={setCellSize}
-    senderDelivery={senderDelivery}
-    setSenderDelivery={setSenderDelivery}
-    recipientDelivery={recipientDelivery}
-    setRecipientDelivery={setRecipientDelivery}
-    clientOrders={clientOrders}
-    setClientOrders={setClientOrders}
-    orderMessage={orderMessage}
-    setOrderMessage={setOrderMessage}
-    language={language}
-    t={t}
-    addLog={addLog}
-    users={users.filter((user) => user.role_name === "recipient" || user.role_name === "client")}
-  />
+  <ClientForm addLog={addLog} />
 </TabsContent>
 
 

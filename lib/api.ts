@@ -43,6 +43,36 @@ export async function fetchOrdersByCourier(courier_id: string | number) {
   return response.json();
 }
 
+export async function fetchOrdersByClient(client_id: string | number) {
+  const response = await fetch(`/api/orders/user/${client_id}`, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Request failed: ${response.status} ${response.statusText}`);
+  }
+
+  return response.json();
+}
+
+export async function fetchUsers() {
+  const response = await fetch('/api/proxy/users', {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Request failed: ${response.status} ${response.statusText}`);
+  }
+
+  return response.json();
+}
+
 // Получение заказов водителя по driver_id
 export async function fetchDriverTrips(driverId: string | number) {
   const response = await fetch(`/api/proxy/trips/driver/${driverId}`, {
@@ -178,6 +208,27 @@ export async function fetchOrderTrack(order_id: number) {
 
   if (!response.ok) {
     throw new Error(`Request fetchOrderTrack failed: ${response.status} ${response.statusText}`);
+  }
+
+  return response.json();
+}
+
+// Получение ошибок пользователя для FSM
+export async function fetchFsmUserErrors(user_id: number, limit: number) {
+  const params = new URLSearchParams({
+    user_id: String(user_id),
+    limit: String(limit),
+  });
+
+  const response = await fetch(`/api/proxy/fsm/user-errors?${params.toString()}`, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Request fetchFsmUserErrors failed: ${response.status} ${response.statusText}`);
   }
 
   return response.json();
