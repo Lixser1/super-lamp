@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
-import { fetchOrdersByCourier, enqueueFsmRequest, makeFsmEnqueueRequest } from "@/lib/api"
+import { fetchOrdersByCourier, enqueueFsmRequest, makeFsmEnqueueRequest, fetchFsmUserErrors } from "@/lib/api"
 import { useEffect, useState } from "react"
 
 interface CourierFormProps {
@@ -45,6 +45,7 @@ export function CourierForm({
   const [assignedOrders, setAssignedOrders] = useState<any[]>([]);
   const [courierOrdersFilter, setCourierOrdersFilter] = useState<"all" | "active" | "archive">("active");
   const [pinCodes, setPinCodes] = useState<{ [orderId: number]: string }>({});
+  const [userErrors, setUserErrors] = useState<any[]>([]);
 
   // Загружаем заказы при изменении selectedCourierId
   useEffect(() => {
@@ -58,7 +59,19 @@ export function CourierForm({
       }
     };
 
+    const loadUserErrors = async () => {
+      if (!selectedCourierId) return;
+      try {
+        const errorsResponse = await fetchFsmUserErrors(parseInt(selectedCourierId), 1);
+        setUserErrors(errorsResponse.errors || []);
+      } catch (error) {
+        console.error("Ошибка при загрузке ошибок пользователя:", error);
+        setUserErrors([]);
+      }
+    };
+
     loadCourierOrders();
+    loadUserErrors();
   }, [selectedCourierId]);
 
   // Фильтруем заказы в зависимости от выбранного фильтра
@@ -68,6 +81,9 @@ export function CourierForm({
     if (courierOrdersFilter === "archive") return order.status === "locker_closed" || order.status === "order_cancelled";
     return true;
   });
+
+  // Находим релевантную ошибку
+  const relevantError = userErrors.find(e => ["order_assign_courier1", "cancel_order", "confirm_courier2_delivery"].includes(e.process_name));
 
   // Функция для проверки PIN-кода
   const handleVerifyPin = async (orderId: number) => {
@@ -162,6 +178,14 @@ export function CourierForm({
               }
             >
               {courierMessage}
+            </Badge>
+          </div>
+        )}
+
+        {relevantError && (
+          <div>
+            <Badge variant="destructive">
+              {relevantError.last_error}
             </Badge>
           </div>
         )}
