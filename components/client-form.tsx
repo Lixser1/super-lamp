@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { useLanguage } from "@/lib/language-context"
-import { fetchOrdersByClient, fetchUsers, fetchFsmUserErrors, enqueueFsmRequest, makeFsmEnqueueRequest } from "@/lib/api"
+import { fetchOrdersByClient, fetchUsers, fetchFsmUserErrors, enqueueFsmRequest, makeFsmEnqueueRequest, fetchAccessCodeView } from "@/lib/api"
 
 export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
   const [selectedClientId, setSelectedClientId] = useState<string>("")
@@ -22,6 +22,9 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
     status: string
     canCancel: boolean
     isLoading?: boolean
+    accessCode?: string
+    isRequestingCode?: boolean
+    isGettingCode?: boolean
   }>>([])
   const [orderMessage, setOrderMessage] = useState<string | null>(null)
   const [users, setUsers] = useState<Array<{ id: number; name: string; role_name: string; city: string | null }>>([])
@@ -156,6 +159,9 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
           status: "processing",
           canCancel: false,
           isLoading: true,
+          accessCode: undefined,
+          isRequestingCode: false,
+          isGettingCode: false,
         },
       ]);
     }
@@ -203,6 +209,65 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
           )
         );
       }
+    }
+  }
+
+  const handleRequestAccessCode = async (orderId: number) => {
+    setClientOrders(prev =>
+      prev.map(order =>
+        order.id === orderId ? { ...order, isRequestingCode: true } : order
+      )
+    );
+
+    const requestData = makeFsmEnqueueRequest({
+      entity_type: "order",
+      entity_id: orderId,
+      process_name: "request_locker_access_code",
+      user_id: parseInt(selectedClientId),
+      target_user_id: parseInt(selectedClientId),
+      user_role: "client",
+      metadata: { leg: "pickup" },
+    });
+
+    try {
+      const result = await enqueueFsmRequest(requestData);
+      addLog({
+        role: "client",
+        action: "request_access_code",
+        data: result,
+      });
+    } catch (error) {
+      console.error('Error requesting access code:', error);
+    } finally {
+      setClientOrders(prev =>
+        prev.map(order =>
+          order.id === orderId ? { ...order, isRequestingCode: false } : order
+        )
+      );
+    }
+  }
+
+  const handleGetAccessCode = async (orderId: number) => {
+    setClientOrders(prev =>
+      prev.map(order =>
+        order.id === orderId ? { ...order, isGettingCode: true } : order
+      )
+    );
+
+    try {
+      const result = await fetchAccessCodeView(orderId, "pickup", parseInt(selectedClientId));
+      setClientOrders(prev =>
+        prev.map(order =>
+          order.id === orderId ? { ...order, accessCode: result.code, isGettingCode: false } : order
+        )
+      );
+    } catch (error) {
+      console.error('Error getting access code:', error);
+      setClientOrders(prev =>
+        prev.map(order =>
+          order.id === orderId ? { ...order, isGettingCode: false } : order
+        )
+      );
     }
   }
 
@@ -332,7 +397,8 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
                     <TableHead>{t.client.orderId}</TableHead>
                     <TableHead>{t.client.description}</TableHead>
                     <TableHead>{t.client.status}</TableHead>
-                    <TableHead></TableHead>
+                    <TableHead>{t.client.accessCode || "Access Code"}</TableHead>
+                    <TableHead>{t.client.actions || "Actions"}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -367,18 +433,46 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
                         )}
                       </TableCell>
                       <TableCell>
+                        {order.isLoading ? (
+                          <div className="h-4 w-24 bg-muted animate-pulse rounded" />
+                        ) : order.accessCode ? (
+                          <div className="flex flex-col gap-1">
+                            <span className="text-xs font-medium">{t.client.accessCode || "Access Code"}</span>
+                            <span className="text-sm">{order.accessCode}</span>
+                          </div>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">{language === "ru" ? "Код не получен" : "No code yet"}</span>
+                        )}
+                      </TableCell>
+                      <TableCell>
                         {!order.isLoading && (
-                          order.canCancel ? (
+                          <div className="flex flex-row flex-wrap gap-2 items-center">
                             <Button
                               size="sm"
-                              variant="destructive"
-                              onClick={() => handleCancelClientOrder(order.id)}
+                              onClick={() => handleRequestAccessCode(order.id)}
+                              disabled={!selectedClientId || order.isRequestingCode || order.isGettingCode}
                             >
-                              {t.client.cancelOrder}
+                              {order.isRequestingCode ? (language === "ru" ? "Запрос..." : "Requesting...") : (language === "ru" ? "Запросить код" : "Request code")}
                             </Button>
-                          ) : (
-                            <span className="text-xs text-muted-foreground">{t.client.cannotCancel}</span>
-                          )
+                            <Button
+                              size="sm"
+                              onClick={() => handleGetAccessCode(order.id)}
+                              disabled={!selectedClientId || order.isGettingCode || order.isRequestingCode}
+                            >
+                              {order.isGettingCode ? (language === "ru" ? "Получаю..." : "Getting...") : (language === "ru" ? "Получить код" : "Get code")}
+                            </Button>
+                            {order.canCancel ? (
+                              <Button
+                                size="sm"
+                                variant="destructive"
+                                onClick={() => handleCancelClientOrder(order.id)}
+                              >
+                                {t.client.cancelOrder}
+                              </Button>
+                            ) : (
+                              <span className="text-xs text-muted-foreground">{t.client.cannotCancel}</span>
+                            )}
+                          </div>
                         )}
                       </TableCell>
                     </TableRow>

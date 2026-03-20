@@ -86,7 +86,12 @@ export function CourierForm({
   const relevantError = userErrors.find(e => ["order_assign_courier1", "cancel_order", "confirm_courier2_delivery"].includes(e.process_name));
 
   // Функция для проверки PIN-кода
-  const handleVerifyPin = async (orderId: number) => {
+  const handleVerifyPin = async (orderId: number, orderLeg: string) => {
+    if (orderLeg !== "delivery") {
+      alert(language === "ru" ? "PIN доступен только для leg=delivery" : "PIN is only available for leg=delivery");
+      return;
+    }
+
     const pin = pinCodes[orderId];
     if (!pin) {
       alert(language === "ru" ? "Введите PIN-код" : "Enter PIN code");
@@ -128,7 +133,8 @@ export function CourierForm({
         />
         <Button
           size="sm"
-          onClick={() => handleVerifyPin(order.id)}
+          onClick={() => handleVerifyPin(order.id, order.leg)}
+          disabled={order.leg !== "delivery"}
         >
           {language === "ru" ? "Проверить PIN" : "Verify PIN"}
         </Button>
