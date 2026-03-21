@@ -51,6 +51,11 @@ export const translations = {
       userId: "User ID",
       selectUserId: "Select user ID",
       description: "Description",
+      openCell: "Open Cell",
+      closeCell: "Close Cell",
+      error: "Error",
+      recipientUserId: "Recipient User ID",
+      selectRecipientUserId: "Select recipient user ID",
     },
     recipient: {
       title: "Recipient Actions",
@@ -312,6 +317,11 @@ export const translations = {
       userId: "ID пользователя",
       selectUserId: "Выберите ID пользователя",
       description: "Описание",
+      openCell: "Открыть ячейку",
+      closeCell: "Закрыть ячейку",
+      error: "Ошибка",
+      recipientUserId: "ID получателя",
+      selectRecipientUserId: "Выберите ID получателя",
     },
     recipient: {
       title: "Действия получателя",

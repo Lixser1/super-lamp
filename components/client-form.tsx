@@ -21,10 +21,14 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
     description: string
     status: string
     canCancel: boolean
+    pickupType?: string
     isLoading?: boolean
     accessCode?: string
     isRequestingCode?: boolean
     isGettingCode?: boolean
+    isOpeningCell?: boolean
+    isClosingCell?: boolean
+    isRequestingError?: boolean
   }>>([])
   const [orderMessage, setOrderMessage] = useState<string | null>(null)
   const [users, setUsers] = useState<Array<{ id: number; name: string; role_name: string; city: string | null }>>([])
@@ -54,6 +58,7 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
         description: order.description || `Order ${order.id}`,
         status: order.status,
         canCancel: order.status !== 'cancelled' && order.status !== 'completed',
+        pickupType: order.pickup_type,
       }));
       setClientOrders(processedOrders);
     } catch (error) {
@@ -158,10 +163,14 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
           description: `${parcelType} to cell ${cellSize}`,
           status: "processing",
           canCancel: false,
+          pickupType: recipientDelivery,
           isLoading: true,
           accessCode: undefined,
           isRequestingCode: false,
           isGettingCode: false,
+          isOpeningCell: false,
+          isClosingCell: false,
+          isRequestingError: false,
         },
       ]);
     }
@@ -266,6 +275,111 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
       setClientOrders(prev =>
         prev.map(order =>
           order.id === orderId ? { ...order, isGettingCode: false } : order
+        )
+      );
+    }
+  }
+
+  const handleOpenCell = async (orderId: number) => {
+    setClientOrders(prev =>
+      prev.map(order =>
+        order.id === orderId ? { ...order, isOpeningCell: true } : order
+      )
+    );
+
+    const requestData = makeFsmEnqueueRequest({
+      entity_type: "order",
+      entity_id: orderId,
+      process_name: "open_cell",
+      user_id: parseInt(selectedClientId),
+      target_user_id: parseInt(selectedClientId),
+      user_role: "client",
+      metadata: {},
+    });
+
+    try {
+      const result = await enqueueFsmRequest(requestData);
+      addLog({
+        role: "client",
+        action: "open_cell",
+        data: result,
+      });
+    } catch (error) {
+      console.error('Error opening cell:', error);
+    } finally {
+      setClientOrders(prev =>
+        prev.map(order =>
+          order.id === orderId ? { ...order, isOpeningCell: false } : order
+        )
+      );
+    }
+  }
+
+  const handleCloseCell = async (orderId: number) => {
+    setClientOrders(prev =>
+      prev.map(order =>
+        order.id === orderId ? { ...order, isClosingCell: true } : order
+      )
+    );
+
+    const requestData = makeFsmEnqueueRequest({
+      entity_type: "order",
+      entity_id: orderId,
+      process_name: "close_cell",
+      user_id: parseInt(selectedClientId),
+      target_user_id: parseInt(selectedClientId),
+      user_role: "client",
+      metadata: {},
+    });
+
+    try {
+      const result = await enqueueFsmRequest(requestData);
+      addLog({
+        role: "client",
+        action: "close_cell",
+        data: result,
+      });
+    } catch (error) {
+      console.error('Error closing cell:', error);
+    } finally {
+      setClientOrders(prev =>
+        prev.map(order =>
+          order.id === orderId ? { ...order, isClosingCell: false } : order
+        )
+      );
+    }
+  }
+
+  const handleRequestError = async (orderId: number) => {
+    setClientOrders(prev =>
+      prev.map(order =>
+        order.id === orderId ? { ...order, isRequestingError: true } : order
+      )
+    );
+
+    const requestData = makeFsmEnqueueRequest({
+      entity_type: "order",
+      entity_id: orderId,
+      process_name: "request_locker_access_code",
+      user_id: parseInt(selectedClientId),
+      target_user_id: parseInt(selectedClientId),
+      user_role: "client",
+      metadata: {},
+    });
+
+    try {
+      const result = await enqueueFsmRequest(requestData);
+      addLog({
+        role: "client",
+        action: "request_locker_access_code",
+        data: result,
+      });
+    } catch (error) {
+      console.error('Error requesting error:', error);
+    } finally {
+      setClientOrders(prev =>
+        prev.map(order =>
+          order.id === orderId ? { ...order, isRequestingError: false } : order
         )
       );
     }
@@ -460,6 +574,30 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
                               disabled={!selectedClientId || order.isGettingCode || order.isRequestingCode}
                             >
                               {order.isGettingCode ? (language === "ru" ? "Получаю..." : "Getting...") : (language === "ru" ? "Получить код" : "Get code")}
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleOpenCell(order.id)}
+                              disabled={!selectedClientId || order.isOpeningCell || order.isClosingCell || order.isRequestingError || order.pickupType !== "self"}
+                            >
+                              {order.isOpeningCell ? (language === "ru" ? "Открываю..." : "Opening...") : t.client.openCell}
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleCloseCell(order.id)}
+                              disabled={!selectedClientId || order.isClosingCell || order.isOpeningCell || order.isRequestingError || order.pickupType !== "self"}
+                            >
+                              {order.isClosingCell ? (language === "ru" ? "Закрываю..." : "Closing...") : t.client.closeCell}
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="destructive"
+                              onClick={() => handleRequestError(order.id)}
+                              disabled={!selectedClientId || order.isRequestingError || order.isOpeningCell || order.isClosingCell || order.pickupType !== "self"}
+                            >
+                              {order.isRequestingError ? (language === "ru" ? "Отправка..." : "Sending...") : t.client.error}
                             </Button>
                             {order.canCancel ? (
                               <Button

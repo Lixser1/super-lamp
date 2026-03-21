@@ -39,8 +39,12 @@ export function RecipientForm({
     locker: string;
     cell: string;
     recipientDelivery: "self" | "courier";
+    deliveryType?: string;
     currentStatus: string;
     isCompleted?: boolean;
+    isOpeningCell?: boolean;
+    isClosingCell?: boolean;
+    isRequestingError?: boolean;
   } | null>(null)
   const [recipientLeg, setRecipientLeg] = useState<"pickup" | "delivery">("pickup")
   const [pinDisplay, setPinDisplay] = useState<string | null>(null)
@@ -72,9 +76,13 @@ export function RecipientForm({
         id: data.order_id,
         locker: '', // Нет в данных
         cell: '', // Нет в данных
-        recipientDelivery: data.delivery_type === 'courier' ? 'courier' : 'self', // Предполагаем на основе delivery_type
+        recipientDelivery: data.delivery_type === 'courier' ? 'courier' : 'self',
+        deliveryType: data.delivery_type,
         currentStatus: data.current_status,
         isCompleted,
+        isOpeningCell: false,
+        isClosingCell: false,
+        isRequestingError: false,
       });
       setRecipientLeg(leg)
       setPinDisplay(null); // Сброс PIN при новом поиске
@@ -156,6 +164,99 @@ export function RecipientForm({
         order_id: recipientOrderDetails.id,
         error: String(error),
       });
+    }
+  };
+
+  // Открыть ячейку
+  const handleOpenCell = async () => {
+    if (!recipientOrderDetails) return;
+
+    setRecipientOrderDetails(prev => prev ? { ...prev, isOpeningCell: true } : null);
+
+    const requestData = makeFsmEnqueueRequest({
+      entity_type: "order",
+      entity_id: recipientOrderDetails.id,
+      process_name: "open_cell",
+      user_id: parseInt(selectedRecipientId),
+      target_user_id: parseInt(selectedRecipientId),
+      user_role: "recipient",
+      metadata: {},
+    });
+
+    try {
+      const result = await enqueueFsmRequest(requestData);
+      addLog({
+        role: "recipient",
+        action: "open_cell",
+        order_id: recipientOrderDetails.id,
+        data: result,
+      });
+    } catch (error) {
+      console.error('Error opening cell:', error);
+    } finally {
+      setRecipientOrderDetails(prev => prev ? { ...prev, isOpeningCell: false } : null);
+    }
+  };
+
+  // Закрыть ячейку
+  const handleCloseCell = async () => {
+    if (!recipientOrderDetails) return;
+
+    setRecipientOrderDetails(prev => prev ? { ...prev, isClosingCell: true } : null);
+
+    const requestData = makeFsmEnqueueRequest({
+      entity_type: "order",
+      entity_id: recipientOrderDetails.id,
+      process_name: "close_cell",
+      user_id: parseInt(selectedRecipientId),
+      target_user_id: parseInt(selectedRecipientId),
+      user_role: "recipient",
+      metadata: {},
+    });
+
+    try {
+      const result = await enqueueFsmRequest(requestData);
+      addLog({
+        role: "recipient",
+        action: "close_cell",
+        order_id: recipientOrderDetails.id,
+        data: result,
+      });
+    } catch (error) {
+      console.error('Error closing cell:', error);
+    } finally {
+      setRecipientOrderDetails(prev => prev ? { ...prev, isClosingCell: false } : null);
+    }
+  };
+
+  // Ошибка (request_locker_access_code)
+  const handleRequestError = async () => {
+    if (!recipientOrderDetails) return;
+
+    setRecipientOrderDetails(prev => prev ? { ...prev, isRequestingError: true } : null);
+
+    const requestData = makeFsmEnqueueRequest({
+      entity_type: "order",
+      entity_id: recipientOrderDetails.id,
+      process_name: "request_locker_access_code",
+      user_id: parseInt(selectedRecipientId),
+      target_user_id: parseInt(selectedRecipientId),
+      user_role: "recipient",
+      metadata: {},
+    });
+
+    try {
+      const result = await enqueueFsmRequest(requestData);
+      addLog({
+        role: "recipient",
+        action: "request_locker_access_code",
+        order_id: recipientOrderDetails.id,
+        data: result,
+      });
+    } catch (error) {
+      console.error('Error requesting error:', error);
+    } finally {
+      setRecipientOrderDetails(prev => prev ? { ...prev, isRequestingError: false } : null);
     }
   };
 
@@ -336,6 +437,36 @@ export function RecipientForm({
                 {t.recipient.confirmDelivery}
               </Button>
             )}
+
+          {/* Кнопки для delivery_type === "self" */}
+          {recipientOrderDetails && recipientOrderDetails.deliveryType === "self" && (
+            <>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleOpenCell}
+                disabled={!selectedRecipientId || recipientOrderDetails.isOpeningCell || recipientOrderDetails.isClosingCell || recipientOrderDetails.isRequestingError}
+              >
+                {recipientOrderDetails.isOpeningCell ? (language === "ru" ? "Открываю..." : "Opening...") : t.client.openCell}
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleCloseCell}
+                disabled={!selectedRecipientId || recipientOrderDetails.isClosingCell || recipientOrderDetails.isOpeningCell || recipientOrderDetails.isRequestingError}
+              >
+                {recipientOrderDetails.isClosingCell ? (language === "ru" ? "Закрываю..." : "Closing...") : t.client.closeCell}
+              </Button>
+              <Button
+                size="sm"
+                variant="destructive"
+                onClick={handleRequestError}
+                disabled={!selectedRecipientId || recipientOrderDetails.isRequestingError || recipientOrderDetails.isOpeningCell || recipientOrderDetails.isClosingCell}
+              >
+                {recipientOrderDetails.isRequestingError ? (language === "ru" ? "Отправка..." : "Sending...") : t.client.error}
+              </Button>
+            </>
+          )}
         </div>
       </CardContent>
     </Card>
