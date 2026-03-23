@@ -85,6 +85,46 @@ export function CourierForm({
   // Находим релевантную ошибку
   const relevantError = userErrors.find(e => ["order_assign_courier1", "cancel_order", "confirm_courier2_delivery"].includes(e.process_name));
 
+  // Функция для открытия ячейки
+  const handleOpenCell = async (orderId: number) => {
+    const requestData = makeFsmEnqueueRequest({
+      entity_type: "order",
+      entity_id: orderId,
+      process_name: "open_cell",
+      user_id: parseInt(selectedCourierId),
+      target_user_id: parseInt(selectedCourierId),
+      user_role: "courier",
+      metadata: {},
+    });
+
+    try {
+      const result = await enqueueFsmRequest(requestData);
+      console.log("Open cell result:", result);
+    } catch (error) {
+      console.error("Error opening cell:", error);
+    }
+  };
+
+  // Функция для закрытия ячейки
+  const handleCloseCell = async (orderId: number) => {
+    const requestData = makeFsmEnqueueRequest({
+      entity_type: "order",
+      entity_id: orderId,
+      process_name: "close_cell",
+      user_id: parseInt(selectedCourierId),
+      target_user_id: parseInt(selectedCourierId),
+      user_role: "courier",
+      metadata: {},
+    });
+
+    try {
+      const result = await enqueueFsmRequest(requestData);
+      console.log("Close cell result:", result);
+    } catch (error) {
+      console.error("Error closing cell:", error);
+    }
+  };
+
   // Функция для проверки PIN-кода
   const handleVerifyPin = async (orderId: number, orderLeg: string) => {
     if (orderLeg !== "delivery") {
@@ -123,6 +163,22 @@ export function CourierForm({
   // Функция для рендера кнопок действий
   const renderCourierActionButtons = (order: any) => (
     <div className="flex gap-2 flex-col">
+      <div className="flex gap-2">
+        <Button
+          size="sm"
+          variant="default"
+          onClick={() => handleOpenCell(order.id)}
+        >
+          {language === "ru" ? "Открыть ячейку" : "Open cell"}
+        </Button>
+        <Button
+          size="sm"
+          variant="default"
+          onClick={() => handleCloseCell(order.id)}
+        >
+          {language === "ru" ? "Закрыть ячейку" : "Close cell"}
+        </Button>
+      </div>
       <div className="flex gap-2">
         <Input
           type="text"

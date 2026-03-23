@@ -2,12 +2,14 @@
 import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
+import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Badge } from "@/components/ui/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { useLanguage } from "@/lib/language-context"
 import { fetchOrdersByClient, fetchUsers, fetchFsmUserErrors, enqueueFsmRequest, makeFsmEnqueueRequest, fetchAccessCodeView } from "@/lib/api"
+import { performCellOperation } from "@/lib/utils"
 
 export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
   const [selectedClientId, setSelectedClientId] = useState<string>("")
@@ -29,6 +31,7 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
     isOpeningCell?: boolean
     isClosingCell?: boolean
     isRequestingError?: boolean
+    pin?: string
   }>>([])
   const [orderMessage, setOrderMessage] = useState<string | null>(null)
   const [users, setUsers] = useState<Array<{ id: number; name: string; role_name: string; city: string | null }>>([])
@@ -59,6 +62,7 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
         status: order.status,
         canCancel: order.status !== 'cancelled' && order.status !== 'completed',
         pickupType: order.pickup_type,
+        pin: "",
       }));
       setClientOrders(processedOrders);
     } catch (error) {
@@ -171,6 +175,7 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
           isOpeningCell: false,
           isClosingCell: false,
           isRequestingError: false,
+          pin: "",
         },
       ]);
     }
@@ -228,18 +233,8 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
       )
     );
 
-    const requestData = makeFsmEnqueueRequest({
-      entity_type: "order",
-      entity_id: orderId,
-      process_name: "request_locker_access_code",
-      user_id: parseInt(selectedClientId),
-      target_user_id: parseInt(selectedClientId),
-      user_role: "client",
-      metadata: { leg: "pickup" },
-    });
-
     try {
-      const result = await enqueueFsmRequest(requestData);
+      const result = await performCellOperation(orderId, parseInt(selectedClientId), "request_locker_access_code", { leg: "pickup" }, "client");
       addLog({
         role: "client",
         action: "request_access_code",
@@ -281,24 +276,20 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
   }
 
   const handleOpenCell = async (orderId: number) => {
+    const order = clientOrders.find(o => o.id === orderId);
+    if (!order) return;
+
+    console.log('handleOpenCell called for orderId:', orderId, 'pin:', order.pin);
     setClientOrders(prev =>
       prev.map(order =>
         order.id === orderId ? { ...order, isOpeningCell: true } : order
       )
     );
 
-    const requestData = makeFsmEnqueueRequest({
-      entity_type: "order",
-      entity_id: orderId,
-      process_name: "open_cell",
-      user_id: parseInt(selectedClientId),
-      target_user_id: parseInt(selectedClientId),
-      user_role: "client",
-      metadata: {},
-    });
-
     try {
-      const result = await enqueueFsmRequest(requestData);
+      console.log('Sending open_cell request');
+      const result = await performCellOperation(orderId, parseInt(selectedClientId), "open_cell", { pin: order.pin }, "client");
+      console.log('open_cell result:', result);
       addLog({
         role: "client",
         action: "open_cell",
@@ -322,18 +313,8 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
       )
     );
 
-    const requestData = makeFsmEnqueueRequest({
-      entity_type: "order",
-      entity_id: orderId,
-      process_name: "close_cell",
-      user_id: parseInt(selectedClientId),
-      target_user_id: parseInt(selectedClientId),
-      user_role: "client",
-      metadata: {},
-    });
-
     try {
-      const result = await enqueueFsmRequest(requestData);
+      const result = await performCellOperation(orderId, parseInt(selectedClientId), "close_cell", {}, "client");
       addLog({
         role: "client",
         action: "close_cell",
@@ -357,18 +338,8 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
       )
     );
 
-    const requestData = makeFsmEnqueueRequest({
-      entity_type: "order",
-      entity_id: orderId,
-      process_name: "request_locker_access_code",
-      user_id: parseInt(selectedClientId),
-      target_user_id: parseInt(selectedClientId),
-      user_role: "client",
-      metadata: {},
-    });
-
     try {
-      const result = await enqueueFsmRequest(requestData);
+      const result = await performCellOperation(orderId, parseInt(selectedClientId), "request_locker_access_code", {}, "client");
       addLog({
         role: "client",
         action: "request_locker_access_code",
@@ -511,7 +482,6 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
                     <TableHead>{t.client.orderId}</TableHead>
                     <TableHead>{t.client.description}</TableHead>
                     <TableHead>{t.client.status}</TableHead>
-                    <TableHead>{t.client.accessCode || "Access Code"}</TableHead>
                     <TableHead>{t.client.actions || "Actions"}</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -547,69 +517,74 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
                         )}
                       </TableCell>
                       <TableCell>
-                        {order.isLoading ? (
-                          <div className="h-4 w-24 bg-muted animate-pulse rounded" />
-                        ) : order.accessCode ? (
-                          <div className="flex flex-col gap-1">
-                            <span className="text-xs font-medium">{t.client.accessCode || "Access Code"}</span>
-                            <span className="text-sm">{order.accessCode}</span>
-                          </div>
-                        ) : (
-                          <span className="text-xs text-muted-foreground">{language === "ru" ? "Код не получен" : "No code yet"}</span>
-                        )}
-                      </TableCell>
-                      <TableCell>
                         {!order.isLoading && (
-                          <div className="flex flex-row flex-wrap gap-2 items-center">
-                            <Button
-                              size="sm"
-                              onClick={() => handleRequestAccessCode(order.id)}
-                              disabled={!selectedClientId || order.isRequestingCode || order.isGettingCode}
-                            >
-                              {order.isRequestingCode ? (language === "ru" ? "Запрос..." : "Requesting...") : (language === "ru" ? "Запросить код" : "Request code")}
-                            </Button>
-                            <Button
-                              size="sm"
-                              onClick={() => handleGetAccessCode(order.id)}
-                              disabled={!selectedClientId || order.isGettingCode || order.isRequestingCode}
-                            >
-                              {order.isGettingCode ? (language === "ru" ? "Получаю..." : "Getting...") : (language === "ru" ? "Получить код" : "Get code")}
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => handleOpenCell(order.id)}
-                              disabled={!selectedClientId || order.isOpeningCell || order.isClosingCell || order.isRequestingError || order.pickupType !== "self"}
-                            >
-                              {order.isOpeningCell ? (language === "ru" ? "Открываю..." : "Opening...") : t.client.openCell}
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => handleCloseCell(order.id)}
-                              disabled={!selectedClientId || order.isClosingCell || order.isOpeningCell || order.isRequestingError || order.pickupType !== "self"}
-                            >
-                              {order.isClosingCell ? (language === "ru" ? "Закрываю..." : "Closing...") : t.client.closeCell}
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="destructive"
-                              onClick={() => handleRequestError(order.id)}
-                              disabled={!selectedClientId || order.isRequestingError || order.isOpeningCell || order.isClosingCell || order.pickupType !== "self"}
-                            >
-                              {order.isRequestingError ? (language === "ru" ? "Отправка..." : "Sending...") : t.client.error}
-                            </Button>
-                            {order.canCancel ? (
+                          <div className="flex flex-col gap-2">
+                            {order.accessCode && (
+                              <div className="text-xs">
+                                <span className="font-medium">{t.client.accessCode || "Access Code"}: </span>
+                                <span>{order.accessCode}</span>
+                              </div>
+                            )}
+                            <div className="flex flex-row flex-wrap gap-2 items-center">
+                              <Button
+                                size="sm"
+                                onClick={() => handleRequestAccessCode(order.id)}
+                                disabled={!selectedClientId || order.isRequestingCode || order.isGettingCode || order.pickupType !== "self"}
+                              >
+                                {order.isRequestingCode ? (language === "ru" ? "Запрос..." : "Requesting...") : (language === "ru" ? "Запросить код" : "Request code")}
+                              </Button>
+                              <Button
+                                size="sm"
+                                onClick={() => handleGetAccessCode(order.id)}
+                                disabled={!selectedClientId || order.isGettingCode || order.isRequestingCode || order.pickupType !== "self"}
+                              >
+                                {order.isGettingCode ? (language === "ru" ? "Получаю..." : "Getting...") : (language === "ru" ? "Получить код" : "Get code")}
+                              </Button>
+                              <Input
+                                type="text"
+                                placeholder={language === "ru" ? "Введите PIN" : "Enter PIN"}
+                                value={order.pin || ""}
+                                onChange={(e) => setClientOrders(prev =>
+                                  prev.map(o => o.id === order.id ? { ...o, pin: e.target.value } : o)
+                                )}
+                                className="w-24 h-8 text-xs"
+                              />
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => handleOpenCell(order.id)}
+                                disabled={!selectedClientId || order.isOpeningCell || order.isClosingCell || order.isRequestingError || order.pickupType !== "self" || !order.pin}
+                              >
+                                {order.isOpeningCell ? (language === "ru" ? "Открываю..." : "Opening...") : t.client.openCell}
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => handleCloseCell(order.id)}
+                                disabled={!selectedClientId || order.isClosingCell || order.isOpeningCell || order.isRequestingError || order.pickupType !== "self"}
+                              >
+                                {order.isClosingCell ? (language === "ru" ? "Закрываю..." : "Closing...") : t.client.closeCell}
+                              </Button>
                               <Button
                                 size="sm"
                                 variant="destructive"
-                                onClick={() => handleCancelClientOrder(order.id)}
+                                onClick={() => handleRequestError(order.id)}
+                                disabled={!selectedClientId || order.isRequestingError || order.isOpeningCell || order.isClosingCell || order.pickupType !== "self"}
                               >
-                                {t.client.cancelOrder}
+                                {order.isRequestingError ? (language === "ru" ? "Отправка..." : "Sending...") : t.client.error}
                               </Button>
-                            ) : (
-                              <span className="text-xs text-muted-foreground">{t.client.cannotCancel}</span>
-                            )}
+                              {order.canCancel ? (
+                                <Button
+                                  size="sm"
+                                  variant="destructive"
+                                  onClick={() => handleCancelClientOrder(order.id)}
+                                >
+                                  {t.client.cancelOrder}
+                                </Button>
+                              ) : (
+                                <span className="text-xs text-muted-foreground">{t.client.cannotCancel}</span>
+                              )}
+                            </div>
                           </div>
                         )}
                       </TableCell>

@@ -1,13 +1,16 @@
 "use client"
 import React, { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { fetchDriverTrips } from "@/lib/api";
+import { fetchAccessCodeView } from "@/lib/api";
+import { performCellOperation } from "@/lib/utils";
+
 
 interface DriverFormProps {
   selectedDriverId: string;
@@ -15,6 +18,10 @@ interface DriverFormProps {
   selectedCity: string;
   setSelectedCity: (city: string) => void;
   driverAvailableOrders: any[];
+  driverReservations: any[];
+  setDriverReservations: (reservations: any[]) => void;
+  loadingOrders: any[];
+  setLoadingOrders: (orders: any[]) => void;
   tripState: "at_from_locker" | "in_transit" | "at_to_locker";
   setTripState: (state: "at_from_locker" | "in_transit" | "at_to_locker") => void;
   activeTripId: number | null;
@@ -43,6 +50,8 @@ interface DriverFormProps {
   setTakenReverseOrders: (orders: number[]) => void;
   placedParcels: { [cellNumber: string]: { orderId: number; originalSize: string } };
   setPlacedParcels: (parcels: { [cellNumber: string]: { orderId: number; originalSize: string } }) => void;
+  reserves: { [orderId: number]: string };
+  setReserves: (reserves: { [orderId: number]: string }) => void;
   showPlacedOrders: boolean;
   setShowPlacedOrders: (show: boolean) => void;
   mode: "create" | "run";
@@ -54,7 +63,11 @@ interface DriverFormProps {
   handleStartTrip: (tripId: number) => void;
   handleChangeTripState: (newState: "at_from_locker" | "in_transit" | "at_to_locker") => void;
   handleTakeSelectedOrders: () => void;
-  handlePlaceParcelInCell: (orderId: number, cellNumber: string) => void;
+  handlePlaceParcelInCell: (orderId: number, cellNumber: string, pin: string) => void;
+  handleReserveDirection: (directionId: number, capacity: string) => void;
+  handleStartLoading: (reservationId: number) => void;
+  handleCompleteLoading: (directionId: number) => void;
+  handleCancelReserve: (reservationId: number) => void;
   handleCloseOrder: () => void;
 }
 
@@ -64,6 +77,10 @@ export function DriverForm({
   selectedCity,
   setSelectedCity,
   driverAvailableOrders,
+  driverReservations,
+  setDriverReservations,
+  loadingOrders,
+  setLoadingOrders,
   tripState,
   setTripState,
   activeTripId,
@@ -92,6 +109,8 @@ export function DriverForm({
   setTakenReverseOrders,
   placedParcels,
   setPlacedParcels,
+  reserves,
+  setReserves,
   showPlacedOrders,
   setShowPlacedOrders,
   mode,
@@ -104,49 +123,115 @@ export function DriverForm({
   handleChangeTripState,
   handleTakeSelectedOrders,
   handlePlaceParcelInCell,
+  handleReserveDirection,
+  handleStartLoading,
+  handleCompleteLoading,
+  handleCancelReserve,
   handleCloseOrder,
 }: DriverFormProps) {
+  const [pins, setPins] = useState<{ [orderId: number]: string }>({});
+  const [orderStates, setOrderStates] = useState<{ [orderId: number]: {
+    accessCode?: string;
+    isRequestingCode?: boolean;
+    isGettingCode?: boolean;
+    isOpeningCell?: boolean;
+    isClosingCell?: boolean;
+    isRequestingError?: boolean;
+  } }>({});
 
-  // Внутреннее состояние для загруженных с API данных
-  const [driverAssignedOrders, setDriverAssignedOrders] = useState<any[]>([]);
-  const [tripFeedFilter, setTripFeedFilter] = useState<"all" | "active" | "archive">("active");
-  const [isLoadingTrips, setIsLoadingTrips] = useState(false);
+  const handleRequestAccessCode = async (orderId: number) => {
+    setOrderStates(prev => ({
+      ...prev,
+      [orderId]: { ...prev[orderId], isRequestingCode: true }
+    }));
 
-  // Загрузка заказов водителя при изменении selectedDriverId
-  useEffect(() => {
-    if (!selectedDriverId) {
-      setDriverAssignedOrders([]);
-      return;
+    try {
+      const result = await performCellOperation(orderId, parseInt(selectedDriverId), "request_locker_access_code", { leg: "pickup" }, "driver");
+      // addLog можно добавить, но поскольку это пропс, возможно не нужно
+    } catch (error) {
+      console.error('Error requesting access code:', error);
+    } finally {
+      setOrderStates(prev => ({
+        ...prev,
+        [orderId]: { ...prev[orderId], isRequestingCode: false }
+      }));
     }
+  };
 
-    const loadDriverTrips = async () => {
-      setIsLoadingTrips(true);
-      try {
-        const tripsData = await fetchDriverTrips(selectedDriverId);
-        // Ответ - массив напрямую, без ключа trips
-        const mappedOrders = (Array.isArray(tripsData) ? tripsData : []).map((trip: any) => ({
-          id: trip.id,
-          tripId: trip.id,
-          status: trip.status,
-          active: trip.active,
-          fromCity: trip.from_city,
-          toCity: trip.to_city,
-          pickupLockerId: trip.pickup_locker_id,
-          deliveryLockerId: trip.delivery_locker_id,
-          createdAt: trip.created_at,
-          orders: trip.orders || [],
-        }));
-        setDriverAssignedOrders(mappedOrders);
-      } catch (error) {
-        console.error("Error loading driver trips:", error);
-        setDriverAssignedOrders([]);
-      } finally {
-        setIsLoadingTrips(false);
-      }
-    };
+  const handleGetAccessCode = async (orderId: number) => {
+    setOrderStates(prev => ({
+      ...prev,
+      [orderId]: { ...prev[orderId], isGettingCode: true }
+    }));
 
-    loadDriverTrips();
-  }, [selectedDriverId]);
+    try {
+      const result = await fetchAccessCodeView(orderId, "pickup", parseInt(selectedDriverId));
+      setOrderStates(prev => ({
+        ...prev,
+        [orderId]: { ...prev[orderId], accessCode: result.code, isGettingCode: false }
+      }));
+    } catch (error) {
+      console.error('Error getting access code:', error);
+      setOrderStates(prev => ({
+        ...prev,
+        [orderId]: { ...prev[orderId], isGettingCode: false }
+      }));
+    }
+  };
+
+  const handleOpenCell = async (orderId: number) => {
+    setOrderStates(prev => ({
+      ...prev,
+      [orderId]: { ...prev[orderId], isOpeningCell: true }
+    }));
+
+    try {
+      const result = await performCellOperation(orderId, parseInt(selectedDriverId), "open_cell", { pin: pins[orderId] }, "driver");
+    } catch (error) {
+      console.error('Error opening cell:', error);
+    } finally {
+      setOrderStates(prev => ({
+        ...prev,
+        [orderId]: { ...prev[orderId], isOpeningCell: false }
+      }));
+    }
+  };
+
+  const handleCloseCell = async (orderId: number) => {
+    setOrderStates(prev => ({
+      ...prev,
+      [orderId]: { ...prev[orderId], isClosingCell: true }
+    }));
+
+    try {
+      const result = await performCellOperation(orderId, parseInt(selectedDriverId), "close_cell", {}, "driver");
+    } catch (error) {
+      console.error('Error closing cell:', error);
+    } finally {
+      setOrderStates(prev => ({
+        ...prev,
+        [orderId]: { ...prev[orderId], isClosingCell: false }
+      }));
+    }
+  };
+
+  const handleRequestError = async (orderId: number) => {
+    setOrderStates(prev => ({
+      ...prev,
+      [orderId]: { ...prev[orderId], isRequestingError: true }
+    }));
+
+    try {
+      const result = await performCellOperation(orderId, parseInt(selectedDriverId), "request_locker_access_code", {}, "driver");
+    } catch (error) {
+      console.error('Error requesting error:', error);
+    } finally {
+      setOrderStates(prev => ({
+        ...prev,
+        [orderId]: { ...prev[orderId], isRequestingError: false }
+      }));
+    }
+  };
 
   return (
     <Card>
@@ -196,6 +281,7 @@ export function DriverForm({
                   <TableHead>ID</TableHead>
                   <TableHead>{language === "ru" ? "Откуда" : "From"}</TableHead>
                   <TableHead>{language === "ru" ? "Куда" : "To"}</TableHead>
+                  <TableHead>{t.driver.reserve}</TableHead>
                   <TableHead></TableHead>
                 </TableRow>
               </TableHeader>
@@ -206,7 +292,21 @@ export function DriverForm({
                     <TableCell>{order.from_city}</TableCell>
                     <TableCell>{order.to_city}</TableCell>
                     <TableCell>
-                      <Button size="sm" onClick={() => handleTakeDriverOrder(order.id)}>
+                      <Input
+                        type="number"
+                        min="0"
+                        className="w-20 h-8"
+                        placeholder="0"
+                        value={reserves[order.id] || ""}
+                        onChange={(e) => setReserves({ ...reserves, [order.id]: e.target.value })}
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <Button 
+                        size="sm" 
+                        onClick={() => handleReserveDirection(order.id, reserves[order.id] || "")}
+                        disabled={!reserves[order.id]}
+                      >
                         {t.driver.takeOrder}
                       </Button>
                     </TableCell>
@@ -220,98 +320,172 @@ export function DriverForm({
         <div>
           <div className="flex items-center justify-between mb-3">
             <h3 className="font-semibold">{t.driver.tripFeed}</h3>
-            <div className="flex gap-2">
-              <Button
-                size="sm"
-                variant={tripFeedFilter === "all" ? "default" : "outline"}
-                onClick={() => setTripFeedFilter("all")}
-              >
-                {t.driver.all}
-              </Button>
-              <Button
-                size="sm"
-                variant={tripFeedFilter === "active" ? "default" : "outline"}
-                onClick={() => setTripFeedFilter("active")}
-              >
-                {t.driver.active}
-              </Button>
-              <Button
-                size="sm"
-                variant={tripFeedFilter === "archive" ? "default" : "outline"}
-                onClick={() => setTripFeedFilter("archive")}
-              >
-                {t.driver.archive}
-              </Button>
-            </div>
           </div>
           <div className="border rounded-lg overflow-hidden">
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>{t.driver.tripId}</TableHead>
-                  <TableHead>{language === "ru" ? "Заказы" : "Orders"}</TableHead>
+                  <TableHead>Reservation ID</TableHead>
+                  <TableHead>{language === "ru" ? "Зарезервировано" : "Reserved"}</TableHead>
+                  <TableHead>{language === "ru" ? "Направление" : "Direction"}</TableHead>
+                  <TableHead></TableHead>
+                  <TableHead></TableHead>
                   <TableHead></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {driverAssignedOrders
-                  .filter((order) => {
-                    if (tripFeedFilter === "active") {
-                      return order.active === 1;
-                    } else if (tripFeedFilter === "archive") {
-                      return order.active !== 1;
-                    }
-                    return true;
-                  })
-                  .map((order) => (
-                    <TableRow key={order.id}>
-                      <TableCell>{order.tripId}</TableCell>
-                      <TableCell>
-                        {order.orders && order.orders.length > 0 ? (
-                          <Select>
-                            <SelectTrigger className="w-48">
-                              <SelectValue placeholder={`${order.orders.length} ${language === "ru" ? "заказов" : "orders"}`} />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {order.orders.map((o: any) => (
-                                <SelectItem key={o.id} value={o.id.toString()}>
-                                  #{o.id} {o.description || ""}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        ) : (
-                          <span className="text-muted-foreground text-sm">
-                            {language === "ru" ? "Нет заказов" : "No orders"}
-                          </span>
-                        )}
-                      </TableCell>
-                      <TableCell className="space-x-2">
-                        {order.active === 1 ? (
-                          <>
-                            <Button
-                              size="sm"
-                              onClick={() => handleStartTrip(order.tripId)}
-                              disabled={hasActiveTrip}
-                            >
-                              {t.driver.startTrip}
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => handleCancelDriverOrder(order.id)}
-                            >
-                              {t.driver.cancelOrder}
-                            </Button>
-                          </>
-                        ) : null}
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                {driverReservations && driverReservations.length > 0 ? (
+                  (() => {
+                    // Группировка резервов по direction_id
+                    const groupedReservations = driverReservations.reduce((groups: { [key: number]: any[] }, reservation) => {
+                      const dirId = reservation.direction_id;
+                      if (!groups[dirId]) {
+                        groups[dirId] = [];
+                      }
+                      groups[dirId].push(reservation);
+                      return groups;
+                    }, {});
+
+                    return Object.entries(groupedReservations).map(([directionId, reservations]) => (
+                      <TableRow key={directionId} className="bg-muted/30">
+                        <TableCell className="font-medium">
+                          {reservations.map((r: any) => (
+                            <div key={r.reservation_id}>#{r.reservation_id}</div>
+                          ))}
+                        </TableCell>
+                        <TableCell>
+                          {reservations.reduce((sum: number, r: any) => sum + (r.reserved_count || 0), 0)}
+                        </TableCell>
+                        <TableCell>
+                          {reservations[0]?.from_city} → {reservations[0]?.to_city}
+                        </TableCell>
+                        <TableCell className="space-x-2">
+                          <Button
+                            size="sm"
+                            onClick={() => handleStartLoading(reservations[0]?.reservation_id)}
+                          >
+                            {t.driver.startLoading}
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              handleCompleteLoading(Number(directionId));
+                            }}
+                          >
+                            {t.driver.completeLoading}
+                          </Button>
+                        </TableCell>
+                        <TableCell></TableCell>
+                        <TableCell>
+                          {reservations.map((r: any) => (
+                            <div key={r.reservation_id} className="mb-1">
+                              <Button
+                                size="sm"
+                                variant="destructive"
+                                onClick={() => handleCancelReserve(r.reservation_id)}
+                              >
+                                {t.driver.cancelReserve} #{r.reservation_id}
+                              </Button>
+                            </div>
+                          ))}
+                        </TableCell>
+                      </TableRow>
+                    ));
+                  })()
+                ) : (
+                  <TableRow>
+                    <TableCell colSpan={4} className="text-center text-muted-foreground">
+                      {language === "ru" ? "Нет активных резервов" : "No active reservations"}
+                    </TableCell>
+                  </TableRow>
+                )}
               </TableBody>
             </Table>
           </div>
         </div>
+
+        {loadingOrders && loadingOrders.length > 0 && (
+          <div className="mt-6">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-semibold">{language === "ru" ? "Заказы для погрузки" : "Orders for loading"}</h3>
+            </div>
+            <div className="border rounded-lg overflow-hidden">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Order ID</TableHead>
+                    <TableHead>{t.driver.actions || "Actions"}</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {loadingOrders.map((order: any) => (
+                    <TableRow key={order.order_id}>
+                      <TableCell className="font-medium">{order.order_id}</TableCell>
+                      <TableCell>
+                        <div className="flex flex-col gap-2">
+                          {orderStates[order.order_id]?.accessCode && (
+                            <div className="text-xs">
+                              <span className="font-medium">{t.client.accessCode || "Access Code"}: </span>
+                              <span>{orderStates[order.order_id].accessCode}</span>
+                            </div>
+                          )}
+                          <div className="flex flex-row flex-wrap gap-2 items-center">
+                            <Button
+                              size="sm"
+                              onClick={() => handleRequestAccessCode(order.order_id)}
+                              disabled={!selectedDriverId || orderStates[order.order_id]?.isRequestingCode || orderStates[order.order_id]?.isGettingCode}
+                            >
+                              {orderStates[order.order_id]?.isRequestingCode ? (language === "ru" ? "Запрос..." : "Requesting...") : (language === "ru" ? "Запросить код" : "Request code")}
+                            </Button>
+                            <Input
+                              type="text"
+                              placeholder="PIN"
+                              value={pins[order.order_id] || ""}
+                              onChange={(e) => setPins({ ...pins, [order.order_id]: e.target.value })}
+                              className="w-20 h-8 text-xs"
+                            />
+                            <Button
+                              size="sm"
+                              onClick={() => handleGetAccessCode(order.order_id)}
+                              disabled={!selectedDriverId || orderStates[order.order_id]?.isGettingCode || orderStates[order.order_id]?.isRequestingCode}
+                            >
+                              {orderStates[order.order_id]?.isGettingCode ? (language === "ru" ? "Получаю..." : "Getting...") : (language === "ru" ? "Получить код" : "Get code")}
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleOpenCell(order.order_id)}
+                              disabled={!selectedDriverId || orderStates[order.order_id]?.isOpeningCell || orderStates[order.order_id]?.isClosingCell || orderStates[order.order_id]?.isRequestingError || !pins[order.order_id]}
+                            >
+                              {orderStates[order.order_id]?.isOpeningCell ? (language === "ru" ? "Открываю..." : "Opening...") : t.client.openCell}
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleCloseCell(order.order_id)}
+                              disabled={!selectedDriverId || orderStates[order.order_id]?.isClosingCell || orderStates[order.order_id]?.isOpeningCell || orderStates[order.order_id]?.isRequestingError}
+                            >
+                              {orderStates[order.order_id]?.isClosingCell ? (language === "ru" ? "Закрываю..." : "Closing...") : t.client.closeCell}
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="destructive"
+                              onClick={() => handleRequestError(order.order_id)}
+                              disabled={!selectedDriverId || orderStates[order.order_id]?.isRequestingError || orderStates[order.order_id]?.isOpeningCell || orderStates[order.order_id]?.isClosingCell}
+                            >
+                              {orderStates[order.order_id]?.isRequestingError ? (language === "ru" ? "Отправка..." : "Sending...") : t.client.error}
+                            </Button>
+                          </div>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </div>
+        )}
 
         {tripId && (
           <div className="border-t pt-6">
@@ -379,13 +553,22 @@ export function DriverForm({
                 </div>
                 <div className="flex gap-2 mt-3">
                   {tripState === "at_from_locker" && (
-                    <Button
-                      size="sm"
-                      onClick={handleTakeSelectedOrders}
-                      disabled={selectedDirectOrders.length === 0}
-                    >
-                      {t.driver.takeSelected}
-                    </Button>
+                    <>
+                      <Button
+                        size="sm"
+                        onClick={handleTakeSelectedOrders}
+                        disabled={selectedDirectOrders.length === 0}
+                      >
+                        {t.driver.takeSelected}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => handleStartTrip(tripId || activeTripId!)}
+                      >
+                        {t.driver.startTrip}
+                      </Button>
+                    </>
                   )}
                   {tripState === "in_transit" && (
                     <Button
@@ -517,7 +700,7 @@ export function DriverForm({
                                     ) : availableOrders.length > 0 ? (
                                       <Select
                                         onValueChange={(orderId) =>
-                                          handlePlaceParcelInCell(Number.parseInt(orderId), cell.number)
+                                          handlePlaceParcelInCell(Number.parseInt(orderId), cell.number, pins[Number.parseInt(orderId)] || "")
                                         }
                                       >
                                         <SelectTrigger className="w-40">

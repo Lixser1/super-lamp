@@ -50,7 +50,8 @@ export async function POST(
   const params = await context.params;
   const pathSegments = params.path || [];
   const apiPath = pathSegments.join('/');
-  const url = `${BACKEND_URL}/api/${apiPath}`;
+  const searchParams = request.nextUrl.searchParams.toString();
+  const url = `${BACKEND_URL}/api/${apiPath}${searchParams ? `?${searchParams}` : ''}`;
 
   console.log('[PROXY POST] Request to:', url);
   console.log('[PROXY POST] Request method:', request.method);

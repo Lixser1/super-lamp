@@ -13,7 +13,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { FSMEmulator } from "@/components/fsm-emulator"
 import { useLanguage } from "@/lib/language-context"
-import { enqueueFsmRequest, fetchOrderTrack, makeFsmEnqueueRequest, fetchOrdersByClient } from "@/lib/api"
+import { enqueueFsmRequest, fetchOrderTrack, makeFsmEnqueueRequest, fetchOrdersByClient, startDriverLoading, fetchDriverReservations } from "@/lib/api"
 import {
   mockLockers,
   mockOrders,
@@ -99,6 +99,10 @@ const [isLoadingUsers, setIsLoadingUsers] = useState(false);
     [cellNumber: string]: { orderId: number; originalSize: string }
   }>({})
 
+  const [reserves, setReserves] = useState<{ [orderId: number]: string }>({})
+  const [driverReservations, setDriverReservations] = useState<any[]>([])
+  const [loadingOrders, setLoadingOrders] = useState<any[]>([])
+
   const [currentStep, setCurrentStep] = useState(0)
   const [isPlaying, setIsPlaying] = useState(false)
   const [highlightedTab, setHighlightedTab] = useState<string | null>(null)
@@ -112,6 +116,7 @@ const [isLoadingUsers, setIsLoadingUsers] = useState(false);
   const [courierOrdersFilter, setCourierOrdersFilter] = useState<"all" | "active" | "archive">("active")
 const [isRefreshingCourier, setIsRefreshingCourier] = useState(false)
 const [isRefreshingDriver, setIsRefreshingDriver] = useState(false)
+const [isRefreshingDriverReservations, setIsRefreshingDriverReservations] = useState(false)
 const [isRefreshingClient, setIsRefreshingClient] = useState(false)
 const [isTabActive, setIsTabActive] = useState(true)
 const [pollingInterval, setPollingInterval] = useState(20000)
@@ -119,6 +124,7 @@ const [lastFetchTime, setLastFetchTime] = useState<{ [key: string]: number }>({}
 
   const courierIntervalRef = useRef<NodeJS.Timeout | null>(null)
   const clientIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  const driverReservationsIntervalRef = useRef<NodeJS.Timeout | null>(null)
   
 useEffect(() => {
   fetchUsers();
@@ -450,6 +456,46 @@ const refreshDriverOrders = async () => {
   }
 };
 
+const refreshDriverReservations = async () => {
+  if (isRefreshingDriverReservations) return;
+  setIsRefreshingDriverReservations(true);
+
+  try {
+    const reservations = await fetchDriverReservations(selectedDriverId);
+    setDriverReservations(Array.isArray(reservations) ? reservations : []);
+  } catch (error) {
+    console.error("Error refreshing driver reservations:", error);
+  } finally {
+    setIsRefreshingDriverReservations(false);
+  }
+};
+
+// Polling для резервов водителя
+useEffect(() => {
+  if (!selectedDriverId || !isTabActive) return;
+
+  refreshDriverReservations();
+
+  const doPoll = async () => {
+    const now = Date.now();
+    const lastFetch = lastFetchTime['driverReservations'] || 0;
+
+    if (now - lastFetch < pollingInterval - 1000) {
+      return;
+    }
+
+    setLastFetchTime(prev => ({ ...prev, driverReservations: now }));
+    await refreshDriverReservations();
+  };
+
+  if (driverReservationsIntervalRef.current) clearInterval(driverReservationsIntervalRef.current);
+  driverReservationsIntervalRef.current = setInterval(doPoll, pollingInterval);
+
+  return () => {
+    if (driverReservationsIntervalRef.current) clearInterval(driverReservationsIntervalRef.current);
+  };
+}, [selectedDriverId, isTabActive, pollingInterval, lastFetchTime]);
+
   const handleTakeOrder = async (orderId: number) => {
   setCourierMessage(null);
 
@@ -589,6 +635,82 @@ const refreshDriverOrders = async () => {
     console.error("Error cancelling driver order:", error);
   }
 };
+
+  const handleReserveDirection = async (directionId: number, capacity: string) => {
+    const capacityNum = parseInt(capacity);
+    if (isNaN(capacityNum) || capacityNum <= 0) {
+      console.error("Invalid capacity value");
+      return;
+    }
+
+    const requestData = makeFsmEnqueueRequest({
+      entity_type: "direction",
+      entity_id: directionId,
+      process_name: "direction_reserve_slot",
+      user_id: parseInt(selectedDriverId),
+      target_user_id: parseInt(selectedDriverId),
+      target_role: "driver",
+      metadata: { capacity: capacityNum },
+    });
+
+    try {
+      const result = await enqueueFsmRequest(requestData);
+      handleAction("driver", "reserve_direction", result);
+      setReserves({ ...reserves, [directionId]: "" }); // Очистить инпут после успешного запроса
+    } catch (error) {
+      console.error("Error reserving direction:", error);
+    }
+  };
+
+  const handleStartLoading = async (reservationId: number) => {
+    try {
+      const result = await startDriverLoading(reservationId, parseInt(selectedDriverId));
+      handleAction("driver", "start_loading", result);
+      // Сохраняем заказы из ответа
+      if (result.orders && Array.isArray(result.orders)) {
+        setLoadingOrders(result.orders);
+      }
+    } catch (error) {
+      console.error("Error starting loading:", error);
+    }
+  };
+
+  const handleCompleteLoading = async (directionId: number) => {
+    const requestData = makeFsmEnqueueRequest({
+      entity_type: "direction",
+      entity_id: directionId,
+      process_name: "direction_complete_loading",
+      user_id: parseInt(selectedDriverId),
+      target_user_id: parseInt(selectedDriverId),
+      target_role: "driver",
+      metadata: {},
+    });
+
+    try {
+      const result = await enqueueFsmRequest(requestData);
+      handleAction("driver", "complete_loading", result);
+    } catch (error) {
+      console.error("Error completing loading:", error);
+    }
+  };
+
+  const handleCancelReserve = async (reservationId: number) => {
+    const requestData = makeFsmEnqueueRequest({
+      entity_type: "driver_reservations",
+      entity_id: reservationId,
+      process_name: "driver_reservation_cancel",
+      user_id: parseInt(selectedDriverId),
+      target_user_id: parseInt(selectedDriverId),
+      target_role: "driver",
+    });
+
+    try {
+      const result = await enqueueFsmRequest(requestData);
+      handleAction("driver", "cancel_reserve", result);
+    } catch (error) {
+      console.error("Error cancelling reserve:", error);
+    }
+  };
 const fetchUsers = async () => {
   setIsLoadingUsers(true);
   try {
@@ -706,45 +828,49 @@ const fetchUsers = async () => {
 };
 
 
-  const handlePlaceParcelInCell = async (orderId: number, cellNumber: string) => {
-  const requestData = makeFsmEnqueueRequest({
-    entity_type: "order",
-    entity_id: orderId,
-    process_name: "open_cell", // Процесс для открытия ячейки
-    user_id: parseInt(selectedDriverId),
-    target_user_id: parseInt(selectedDriverId), // Оба ID совпадают
-  });
+  const handlePlaceParcelInCell = async (orderId: number, cellNumber: string, pin: string) => {
+    console.log('handlePlaceParcelInCell called for orderId:', orderId, 'cellNumber:', cellNumber, 'pin:', pin);
+    const requestData = makeFsmEnqueueRequest({
+      entity_type: "order",
+      entity_id: orderId,
+      process_name: "place_parcel_in_cell", // Процесс для размещения посылки в ячейке
+      user_id: parseInt(selectedDriverId),
+      target_user_id: parseInt(selectedDriverId), // Оба ID совпадают
+      metadata: { pin },
+    });
 
-  try {
-    const result = await enqueueFsmRequest(requestData);
+    try {
+      console.log('Sending place_parcel_in_cell request');
+      const result = await enqueueFsmRequest(requestData);
+      console.log('place_parcel_in_cell result:', result);
 
-    // Обновляем локальное состояние
-    const order = [...directOrders, ...reverseOrders].find((o) => o.id === orderId);
-    if (!order) return;
+      // Обновляем локальное состояние
+      const order = [...directOrders, ...reverseOrders].find((o) => o.id === orderId);
+      if (!order) return;
 
-    const cell = freeCells.find((c) => c.number === cellNumber);
-    if (!cell) return;
+      const cell = freeCells.find((c) => c.number === cellNumber);
+      if (!cell) return;
 
-    const sizeOrder = { P: 1, S: 2, M: 3, L: 4 };
-    const orderSize = sizeOrder[order.size as keyof typeof sizeOrder] || 0;
-    const cellSizeValue = sizeOrder[cell.size as keyof typeof sizeOrder] || 0;
+      const sizeOrder = { P: 1, S: 2, M: 3, L: 4 };
+      const orderSize = sizeOrder[order.size as keyof typeof sizeOrder] || 0;
+      const cellSizeValue = sizeOrder[cell.size as keyof typeof sizeOrder] || 0;
 
-    if (orderSize > cellSizeValue) {
-      console.log("[v0] Cannot place larger parcel in smaller cell");
-      return;
+      if (orderSize > cellSizeValue) {
+        console.log("[v0] Cannot place larger parcel in smaller cell");
+        return;
+      }
+
+      setTakenDirectOrders(takenDirectOrders.filter((id) => id !== orderId));
+      setTakenReverseOrders(takenReverseOrders.filter((id) => id !== orderId));
+
+      setPlacedParcels({ ...placedParcels, [cellNumber]: { orderId, originalSize: order.size } });
+      setFreeCells(freeCells.filter((c) => c.number !== cellNumber));
+
+      handleAction("driver", "place_parcel_in_cell", result);
+    } catch (error) {
+      console.error("Error placing parcel in cell:", error);
     }
-
-    setTakenDirectOrders(takenDirectOrders.filter((id) => id !== orderId));
-    setTakenReverseOrders(takenReverseOrders.filter((id) => id !== orderId));
-
-    setPlacedParcels({ ...placedParcels, [cellNumber]: { orderId, originalSize: order.size } });
-    setFreeCells(freeCells.filter((c) => c.number !== cellNumber));
-
-    handleAction("driver", "place_parcel_in_cell", result);
-  } catch (error) {
-    console.error("Error placing parcel in cell:", error);
-  }
-};
+  };
 
   const handleCancelCourierOrder = async (orderId: number) => {
     setCourierMessage(null); // Сбрасываем предыдущее сообщение
@@ -1100,6 +1226,10 @@ const filteredAvailableOrders = availableOrders.filter((o: any) => {
     selectedCity={selectedCity}
     setSelectedCity={setSelectedCity}
     driverAvailableOrders={driverAvailableOrders}
+    driverReservations={driverReservations}
+    setDriverReservations={setDriverReservations}
+    loadingOrders={loadingOrders}
+    setLoadingOrders={setLoadingOrders}
     tripState={tripState}
     setTripState={setTripState}
     activeTripId={activeTripId}
@@ -1128,6 +1258,8 @@ const filteredAvailableOrders = availableOrders.filter((o: any) => {
     setTakenReverseOrders={setTakenReverseOrders}
     placedParcels={placedParcels}
     setPlacedParcels={setPlacedParcels}
+    reserves={reserves}
+    setReserves={setReserves}
     showPlacedOrders={showPlacedOrders}
     setShowPlacedOrders={setShowPlacedOrders}
     mode={mode}
@@ -1140,6 +1272,10 @@ const filteredAvailableOrders = availableOrders.filter((o: any) => {
     handleChangeTripState={handleChangeTripState}
     handleTakeSelectedOrders={handleTakeSelectedOrders}
     handlePlaceParcelInCell={handlePlaceParcelInCell}
+    handleReserveDirection={handleReserveDirection}
+    handleStartLoading={handleStartLoading}
+    handleCompleteLoading={handleCompleteLoading}
+    handleCancelReserve={handleCancelReserve}
     handleCloseOrder={handleCloseOrder}
   />
           </TabsContent>

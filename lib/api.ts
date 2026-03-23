@@ -73,9 +73,9 @@ export async function fetchUsers() {
   return response.json();
 }
 
-// Получение заказов водителя по driver_id
-export async function fetchDriverTrips(driverId: string | number) {
-  const response = await fetch(`/api/proxy/trips/driver/${driverId}`, {
+// Получение резервов водителя по driver_id
+export async function fetchDriverReservations(driverId: string | number) {
+  const response = await fetch(`/api/proxy/driver/${driverId}/reservations`, {
     method: 'GET',
     headers: {
       'Content-Type': 'application/json',
@@ -83,7 +83,25 @@ export async function fetchDriverTrips(driverId: string | number) {
   });
 
   if (!response.ok) {
-    throw new Error(`Request fetchDriverTrips failed: ${response.status} ${response.statusText}`);
+    throw new Error(`Request fetchDriverReservations failed: ${response.status} ${response.statusText}`);
+  }
+
+  return response.json();
+}
+
+// Начать погрузку по резерву
+export async function startDriverLoading(reservationId: number, driverUserId: number) {
+  const url = `/api/proxy/driver/reservation/${reservationId}/start-loading?driver_user_id=${driverUserId}`;
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Request startDriverLoading failed: ${response.status} ${response.statusText}`);
   }
 
   return response.json();
