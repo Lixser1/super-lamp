@@ -831,12 +831,13 @@ const fetchUsers = async () => {
   const handlePlaceParcelInCell = async (orderId: number, cellNumber: string, pin: string) => {
     console.log('handlePlaceParcelInCell called for orderId:', orderId, 'cellNumber:', cellNumber, 'pin:', pin);
     const requestData = makeFsmEnqueueRequest({
-      entity_type: "order",
+      entity_type: "locker",
       entity_id: orderId,
       process_name: "place_parcel_in_cell", // Процесс для размещения посылки в ячейке
       user_id: parseInt(selectedDriverId),
-      target_user_id: parseInt(selectedDriverId), // Оба ID совпадают
-      metadata: { pin },
+      target_user_id: parseInt(selectedDriverId),
+      target_role: "driver",
+      metadata: { pin, leg: "pickup" },
     });
 
     try {

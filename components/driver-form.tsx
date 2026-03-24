@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { fetchAccessCodeView } from "@/lib/api";
+import { fetchAccessCodeView, startDriverTrip, fetchDriverReservations, fetchDriverTripData } from "@/lib/api";
 import { performCellOperation } from "@/lib/utils";
 
 
@@ -60,7 +60,6 @@ interface DriverFormProps {
   users: Array<{ id: number; name: string; role_name: string }>;
   handleTakeDriverOrder: (orderId: number) => void;
   handleCancelDriverOrder: (orderId: number) => void;
-  handleStartTrip: (tripId: number) => void;
   handleChangeTripState: (newState: "at_from_locker" | "in_transit" | "at_to_locker") => void;
   handleTakeSelectedOrders: () => void;
   handlePlaceParcelInCell: (orderId: number, cellNumber: string, pin: string) => void;
@@ -119,7 +118,6 @@ export function DriverForm({
   users,
   handleTakeDriverOrder,
   handleCancelDriverOrder,
-  handleStartTrip,
   handleChangeTripState,
   handleTakeSelectedOrders,
   handlePlaceParcelInCell,
@@ -129,7 +127,7 @@ export function DriverForm({
   handleCancelReserve,
   handleCloseOrder,
 }: DriverFormProps) {
-  const [pins, setPins] = useState<{ [orderId: number]: string }>({});
+  const [currentDirectionId, setCurrentDirectionId] = useState<number | null>(null);
   const [orderStates, setOrderStates] = useState<{ [orderId: number]: {
     accessCode?: string;
     isRequestingCode?: boolean;
@@ -138,6 +136,8 @@ export function DriverForm({
     isClosingCell?: boolean;
     isRequestingError?: boolean;
   } }>({});
+  const [pins, setPins] = useState<{ [orderId: number]: string }>({});
+  const [tripData, setTripData] = useState<{ trip_id: number; orders: Array<{ order_id: number }> } | null>(null);
 
   const handleRequestAccessCode = async (orderId: number) => {
     setOrderStates(prev => ({
@@ -146,7 +146,7 @@ export function DriverForm({
     }));
 
     try {
-      const result = await performCellOperation(orderId, parseInt(selectedDriverId), "request_locker_access_code", { leg: "pickup" }, "driver");
+      const result = await performCellOperation(orderId, parseInt(selectedDriverId), "request_locker_access_code", { leg: "pickup" }, "driver", { targetRole: "driver", leg: "pickup" });
       // addLog можно добавить, но поскольку это пропс, возможно не нужно
     } catch (error) {
       console.error('Error requesting access code:', error);
@@ -166,9 +166,10 @@ export function DriverForm({
 
     try {
       const result = await fetchAccessCodeView(orderId, "pickup", parseInt(selectedDriverId));
+      console.log('fetchAccessCodeView result:', result);
       setOrderStates(prev => ({
         ...prev,
-        [orderId]: { ...prev[orderId], accessCode: result.code, isGettingCode: false }
+        [orderId]: { ...prev[orderId], accessCode: result.pin, isGettingCode: false }
       }));
     } catch (error) {
       console.error('Error getting access code:', error);
@@ -186,7 +187,7 @@ export function DriverForm({
     }));
 
     try {
-      const result = await performCellOperation(orderId, parseInt(selectedDriverId), "open_cell", { pin: pins[orderId] }, "driver");
+      const result = await performCellOperation(orderId, parseInt(selectedDriverId), "open_cell", { pin: pins[orderId] }, "driver", { targetRole: "driver", leg: "pickup" });
     } catch (error) {
       console.error('Error opening cell:', error);
     } finally {
@@ -204,7 +205,7 @@ export function DriverForm({
     }));
 
     try {
-      const result = await performCellOperation(orderId, parseInt(selectedDriverId), "close_cell", {}, "driver");
+      const result = await performCellOperation(orderId, parseInt(selectedDriverId), "close_cell", { leg: "pickup" }, "driver", { targetRole: "driver", leg: "pickup" });
     } catch (error) {
       console.error('Error closing cell:', error);
     } finally {
@@ -222,7 +223,7 @@ export function DriverForm({
     }));
 
     try {
-      const result = await performCellOperation(orderId, parseInt(selectedDriverId), "request_locker_access_code", {}, "driver");
+      const result = await performCellOperation(orderId, parseInt(selectedDriverId), "request_locker_access_code", { leg: "pickup" }, "driver", { targetRole: "driver", leg: "pickup" });
     } catch (error) {
       console.error('Error requesting error:', error);
     } finally {
@@ -230,6 +231,44 @@ export function DriverForm({
         ...prev,
         [orderId]: { ...prev[orderId], isRequestingError: false }
       }));
+    }
+  };
+
+  const handleStartTrip = async (tripId: number) => {
+    if (!selectedDriverId) return;
+    try {
+      const result = await performCellOperation(
+        tripId,
+        parseInt(selectedDriverId),
+        "complete_trip",
+        {},
+        "driver",
+        { entityType: "trip", targetRole: "driver" }
+      );
+      console.log('complete_trip result:', result);
+    } catch (error) {
+      console.error('Error completing trip:', error);
+    }
+  };
+
+  const handleStartTripByDirection = async (directionId: number) => {
+    if (!selectedDriverId) return;
+    try {
+      // Получаем данные о рейсе
+      const tripResult = await fetchDriverTripData(directionId);
+      console.log('fetchDriverTripData result:', tripResult);
+      
+      if (tripResult && tripResult.trip_id) {
+        setTripData(tripResult);
+        setTripId(tripResult.trip_id);
+        setTripState("in_transit");
+      }
+      
+      // Обновляем резервы после успешного старта рейса
+      const updatedReservations = await fetchDriverReservations(selectedDriverId);
+      setDriverReservations(updatedReservations);
+    } catch (error) {
+      console.error('Error starting trip:', error);
     }
   };
 
@@ -359,22 +398,24 @@ export function DriverForm({
                         <TableCell>
                           {reservations[0]?.from_city} → {reservations[0]?.to_city}
                         </TableCell>
-                        <TableCell className="space-x-2">
-                          <Button
-                            size="sm"
-                            onClick={() => handleStartLoading(reservations[0]?.reservation_id)}
-                          >
-                            {t.driver.startLoading}
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => {
-                              handleCompleteLoading(Number(directionId));
-                            }}
-                          >
-                            {t.driver.completeLoading}
-                          </Button>
+                        <TableCell className="align-top">
+                          <div className="flex flex-wrap gap-2 items-start">
+                            <Button
+                              size="sm"
+                              onClick={() => handleStartLoading(reservations[0]?.reservation_id)}
+                            >
+                              {t.driver.startLoading}
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                handleCompleteLoading(Number(directionId));
+                              }}
+                            >
+                              {t.driver.completeLoading}
+                            </Button>
+                          </div>
                         </TableCell>
                         <TableCell></TableCell>
                         <TableCell>
@@ -495,13 +536,14 @@ export function DriverForm({
                 <Badge variant="default" className="bg-blue-600">
                   {t.driver.tripId}: {tripId}
                 </Badge>
-                <Badge variant="outline" className="text-base px-3 py-1">
-                  {tripState === "at_from_locker"
-                    ? t.driver.atLockerFrom
-                    : tripState === "in_transit"
-                      ? t.driver.inTransit
-                      : t.driver.atLockerTo}
-                </Badge>
+                <Button
+            size="sm"
+            variant="default"
+            onClick={() => handleStartTripByDirection(Number(currentDirectionId))}
+            disabled={!selectedDriverId}
+          >
+            {t.driver.startTrip}
+          </Button>
               </div>
 
               <div>
@@ -563,7 +605,7 @@ export function DriverForm({
                       </Button>
                       <Button
                         size="sm"
-                        variant="secondary"
+                        variant="default"
                         onClick={() => handleStartTrip(tripId || activeTripId!)}
                       >
                         {t.driver.startTrip}
@@ -573,9 +615,10 @@ export function DriverForm({
                   {tripState === "in_transit" && (
                     <Button
                       size="sm"
-                      onClick={() => handleChangeTripState("at_to_locker")}
+                      onClick={() => handleStartTrip(tripId || activeTripId!)}
+                      disabled={!selectedDriverId}
                     >
-                      {t.driver.arrived}
+                      {t.driver.completeTrip || "Завершение рейса"}
                     </Button>
                   )}
                 </div>

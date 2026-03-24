@@ -106,6 +106,42 @@ export async function startDriverLoading(reservationId: number, driverUserId: nu
 
   return response.json();
 }
+
+// Начать рейс по направлению
+export async function startDriverTrip(directionId: number, driverUserId: number) {
+  const url = `/api/proxy/driver/direction/${directionId}/start-trip?driver_user_id=${driverUserId}`;
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Request startDriverTrip failed: ${response.status} ${response.statusText}`);
+  }
+
+  return response.json();
+}
+
+// Получить данные о рейсе по direction_id
+export async function fetchDriverTripData(directionId: number) {
+  const url = `/api/proxy/driver/direction/${directionId}/start-trip`;
+
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Request fetchDriverTripData failed: ${response.status} ${response.statusText}`);
+  }
+
+  return response.json();
+}
 export type FsmEnqueueRequest = {
   entity_type: 'order' | 'trip' | string
   entity_id: number
