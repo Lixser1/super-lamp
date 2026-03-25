@@ -126,11 +126,11 @@ export async function startDriverTrip(directionId: number, driverUserId: number)
 }
 
 // Получить данные о рейсе по direction_id
-export async function fetchDriverTripData(directionId: number) {
-  const url = `/api/proxy/driver/direction/${directionId}/start-trip`;
+export async function fetchDriverTripData(directionId: number, driverUserId: number) {
+  const url = `/api/proxy/driver/direction/${directionId}/start-trip?driver_user_id=${driverUserId}`;
 
   const response = await fetch(url, {
-    method: 'GET',
+    method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
