@@ -129,7 +129,7 @@ export function CourierForm({
 
     try {
       const order = assignedOrders.find(o => o.id === orderId);
-      const leg = order?.status === "order_created" ? "pickup" : "delivery";
+      const leg = order?.status === "order_created" || order?.status === "order_courier1_assigned" ? "pickup" : "delivery";
       
       const result = await fetchAccessCodeView(orderId, leg, parseInt(selectedCourierId));
       setAssignedOrders(prev =>
@@ -245,7 +245,7 @@ export function CourierForm({
           onClick={() => handleOpenCell(order.id)}
           disabled={order.isOpeningCell || order.isClosingCell || order.isRequestingError}
         >
-          {order.isOpeningCell ? (language === "ru" ? "Открываю..." : "Opening...") : t.courier.openCell}
+          {order.isOpeningCell ? (language === "ru" ? "Открываю..." : "Opening...") : (language === "ru" ? "Открыть ячейку" : "Open cell")}
         </Button>
         <Button
           size="sm"
@@ -253,7 +253,7 @@ export function CourierForm({
           onClick={() => handleCloseCell(order.id)}
           disabled={order.isClosingCell || order.isOpeningCell || order.isRequestingError}
         >
-          {order.isClosingCell ? (language === "ru" ? "Закрываю..." : "Closing...") : t.courier.closeCell}
+          {order.isClosingCell ? (language === "ru" ? "Закрываю..." : "Closing...") : (language === "ru" ? "Закрыть ячейку" : "Close cell")}
         </Button>
         <Button
           size="sm"

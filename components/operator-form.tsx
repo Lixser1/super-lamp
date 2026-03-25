@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Button } from "@/components/ui/button"
@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge"
 import { useLanguage } from "@/lib/language-context"
 import { mockLockers, mockOrders, mockCouriers, mockDriverExchangeOrders, mockDriverAssignedOrders } from "@/lib/mock-data"
+import { fetchOperatorTrips, enqueueFsmRequest, makeFsmEnqueueRequest } from "@/lib/api"
 
 interface OperatorFormProps {
   addLog: (log: any) => void
@@ -26,6 +27,25 @@ export function OperatorForm({
   const [lockerOrders, setLockerOrders] = useState<{ [key: number]: any[] }>({})
   const [selectedCouriers, setSelectedCouriers] = useState<{ [key: number]: string }>({})
   const [selectedDrivers, setSelectedDrivers] = useState<{ [key: number]: string }>({})
+  const [operatorTrips, setOperatorTrips] = useState<any[]>([])
+  const [loadingOperatorTrips, setLoadingOperatorTrips] = useState(false)
+
+  // Загрузка рейсов оператора при монтировании компонента
+  useEffect(() => {
+    const loadOperatorTrips = async () => {
+      setLoadingOperatorTrips(true)
+      try {
+        const trips = await fetchOperatorTrips()
+        setOperatorTrips(trips)
+      } catch (error) {
+        console.error('Error loading operator trips:', error)
+      } finally {
+        setLoadingOperatorTrips(false)
+      }
+    }
+
+    loadOperatorTrips()
+  }, [])
   const { t, language } = useLanguage()
 
   const handleAction = (role: string, action: string, extraData?: any) => {
@@ -36,6 +56,33 @@ export function OperatorForm({
       data: extraData,
       result: "OK",
     })
+  }
+
+  const handleRemoveTrip = async (tripId: number) => {
+    try {
+      // Используем унифицированный запрос для снятия рейса
+      const request = makeFsmEnqueueRequest({
+        entity_type: "trip",
+        entity_id: tripId,
+        process_name: "trip_assign_driver",
+        user_id: 777, // оператор
+        target_user_id: 777, // оператор
+        target_role: "driver",
+        metadata: {
+          action: "remove_driver"
+        }
+      })
+
+      await enqueueFsmRequest(request)
+      
+      // Обновляем список рейсов после успешного снятия
+      const updatedTrips = await fetchOperatorTrips()
+      setOperatorTrips(updatedTrips)
+    } catch (error: any) {
+      console.error('Error removing trip:', error)
+      const errorMessage = error?.response?.data?.message || error?.message || (language === "ru" ? "Ошибка снятия рейса" : "Error removing trip")
+      alert(errorMessage)
+    }
   }
 
   const toggleLocker = (lockerId: number) => {
@@ -97,6 +144,54 @@ export function OperatorForm({
         <CardTitle>{t.operator.title}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-6">
+        <div>
+          <h3 className="font-semibold mb-3">{language === "ru" ? "Рейсы со статусом ошибки" : "Trips with error status"}</h3>
+          <div className="border rounded-lg overflow-hidden">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>{language === "ru" ? "Рейс" : "Trip"}</TableHead>
+                  <TableHead>{language === "ru" ? "Водитель" : "Driver"}</TableHead>
+                  <TableHead>{language === "ru" ? "Откуда" : "From"}</TableHead>
+                  <TableHead>{language === "ru" ? "Куда" : "To"}</TableHead>
+                  <TableHead>{language === "ru" ? "Статус" : "Status"}</TableHead>
+                  <TableHead>{language === "ru" ? "Активен" : "Active"}</TableHead>
+                  <TableHead>{language === "ru" ? "Создан" : "Created"}</TableHead>
+                  <TableHead>{language === "ru" ? "Адрес погрузки" : "Pickup Address"}</TableHead>
+                  <TableHead>{language === "ru" ? "Адрес доставки" : "Delivery Address"}</TableHead>
+                  <TableHead>{language === "ru" ? "Снять" : "Remove"}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {operatorTrips.map((trip) => (
+                  <TableRow key={trip.trip_id}>
+                    <TableCell>{trip.trip_id}</TableCell>
+                    <TableCell>{trip.driver_user_id || "-"}</TableCell>
+                    <TableCell>{trip.from_city}</TableCell>
+                    <TableCell>{trip.to_city}</TableCell>
+                    <TableCell>
+                      <Badge variant="secondary">{trip.status}</Badge>
+                    </TableCell>
+                    <TableCell>{trip.active ? "Да" : "Нет"}</TableCell>
+                    <TableCell>{trip.created_at}</TableCell>
+                    <TableCell>{trip.pickup_address}</TableCell>
+                    <TableCell>{trip.delivery_address}</TableCell>
+                    <TableCell>
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        onClick={() => handleRemoveTrip(trip.trip_id)}
+                      >
+                        {language === "ru" ? "Снять" : "Remove"}
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </div>
+
         <div>
           <h3 className="font-semibold mb-3">{t.operator.tripFeed}</h3>
           <div className="border rounded-lg overflow-hidden">

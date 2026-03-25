@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { fetchAccessCodeView, startDriverTrip, fetchDriverReservations, fetchDriverTripData } from "@/lib/api";
+import { fetchAccessCodeView, startDriverTrip, fetchDriverReservations, fetchDriverTripData, fetchOperatorTrips, enqueueFsmRequest, makeFsmEnqueueRequest } from "@/lib/api";
 import { performCellOperation } from "@/lib/utils";
 
 
@@ -138,6 +138,25 @@ export function DriverForm({
   } }>({});
   const [pins, setPins] = useState<{ [orderId: number]: string }>({});
   const [tripData, setTripData] = useState<{ trip_id: number; orders: Array<{ order_id: number }> } | null>(null);
+  const [operatorTrips, setOperatorTrips] = useState<any[]>([]);
+  const [loadingOperatorTrips, setLoadingOperatorTrips] = useState(false);
+
+  // Загрузка рейсов оператора при монтировании компонента
+  useEffect(() => {
+    const loadOperatorTrips = async () => {
+      setLoadingOperatorTrips(true);
+      try {
+        const trips = await fetchOperatorTrips();
+        setOperatorTrips(trips);
+      } catch (error) {
+        console.error('Error loading operator trips:', error);
+      } finally {
+        setLoadingOperatorTrips(false);
+      }
+    };
+
+    loadOperatorTrips();
+  }, []);
 
   const handleRequestAccessCode = async (orderId: number) => {
     setOrderStates(prev => ({
@@ -284,6 +303,34 @@ export function DriverForm({
     }
   };
 
+  const handleRemoveTrip = async (tripId: number) => {
+    if (!selectedDriverId) return;
+    try {
+      // Используем унифицированный запрос для снятия рейса
+      const request = makeFsmEnqueueRequest({
+        entity_type: "trip",
+        entity_id: tripId,
+        process_name: "trip_assign_driver",
+        user_id: parseInt(selectedDriverId),
+        target_user_id: parseInt(selectedDriverId),
+        target_role: "driver",
+        metadata: {
+          action: "remove_driver"
+        }
+      });
+
+      await enqueueFsmRequest(request);
+      
+      // Обновляем список рейсов после успешного снятия
+      const updatedTrips = await fetchOperatorTrips();
+      setOperatorTrips(updatedTrips);
+    } catch (error: any) {
+      console.error('Error removing trip:', error);
+      const errorMessage = error?.response?.data?.message || error?.message || (language === "ru" ? "Ошибка снятия рейса" : "Error removing trip");
+      alert(errorMessage);
+    }
+  };
+
   return (
     <Card>
       <CardHeader>
@@ -425,7 +472,7 @@ export function DriverForm({
 <Button
  size="sm"
  variant="outline"
- onClick={() => handleCompleteLoadingWithValidation(Number(directionId))}
+ onClick={() => handleCompleteLoading(Number(directionId))}
  >
  {t.driver.completeLoading}
 </Button>
@@ -541,6 +588,7 @@ export function DriverForm({
             </div>
           </div>
         )}
+
 
           <div className="border-t pt-6">
             <h3 className="font-semibold mb-4">{t.driver.activeTrip}</h3>
