@@ -6,8 +6,9 @@ import { Badge } from "@/components/ui/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
-import { fetchOrdersByCourier, enqueueFsmRequest, makeFsmEnqueueRequest, fetchFsmUserErrors } from "@/lib/api"
+import { fetchOrdersByCourier, enqueueFsmRequest, makeFsmEnqueueRequest, fetchFsmUserErrors, fetchAccessCodeView } from "@/lib/api"
 import { useEffect, useState } from "react"
+import { performCellOperation } from "@/lib/utils"
 
 interface CourierFormProps {
   selectedCourierId: string;
@@ -24,6 +25,7 @@ interface CourierFormProps {
   handleCancelCourierOrder: (orderId: number) => void;
   handleCourierDeliveryAction: (orderId: number, action: string) => void;
   getCourierStatusLabel: (status: string) => string;
+  addLog: (log: any) => void;
 }
 
 export function CourierForm({
@@ -40,12 +42,15 @@ export function CourierForm({
   handleTakeOrder,
   handleCancelCourierOrder,
   getCourierStatusLabel,
+  addLog,
 }: CourierFormProps) {
   // Локальное состояние для заказов курьера
   const [assignedOrders, setAssignedOrders] = useState<any[]>([]);
   const [courierOrdersFilter, setCourierOrdersFilter] = useState<"all" | "active" | "archive">("active");
   const [pinCodes, setPinCodes] = useState<{ [orderId: number]: string }>({});
   const [userErrors, setUserErrors] = useState<any[]>([]);
+  const [isLoadingUsers, setIsLoadingUsers] = useState(false);
+  const [isRefreshingClient, setIsRefreshingClient] = useState(false);
 
   // Загружаем заказы при изменении selectedCourierId
   useEffect(() => {
@@ -85,123 +90,179 @@ export function CourierForm({
   // Находим релевантную ошибку
   const relevantError = userErrors.find(e => ["order_assign_courier1", "cancel_order", "confirm_courier2_delivery"].includes(e.process_name));
 
-  // Функция для открытия ячейки
-  const handleOpenCell = async (orderId: number) => {
-    const requestData = makeFsmEnqueueRequest({
-      entity_type: "order",
-      entity_id: orderId,
-      process_name: "open_cell",
-      user_id: parseInt(selectedCourierId),
-      target_user_id: parseInt(selectedCourierId),
-      user_role: "courier",
-      metadata: {},
-    });
+  // Функция для запроса кода доступа
+  const handleRequestAccessCode = async (orderId: number) => {
+    setAssignedOrders(prev =>
+      prev.map(order =>
+        order.id === orderId ? { ...order, isRequestingCode: true } : order
+      )
+    );
 
     try {
-      const result = await enqueueFsmRequest(requestData);
-      console.log("Open cell result:", result);
+      const order = assignedOrders.find(o => o.id === orderId);
+      const leg = order?.status === "order_created" ? "pickup" : "delivery";
+      
+      const result = await performCellOperation(orderId, parseInt(selectedCourierId), "request_locker_access_code", { leg }, "courier");
+      addLog({
+        role: "courier",
+        action: "request_access_code",
+        data: result,
+      });
     } catch (error) {
-      console.error("Error opening cell:", error);
+      console.error('Error requesting access code:', error);
+    } finally {
+      setAssignedOrders(prev =>
+        prev.map(order =>
+          order.id === orderId ? { ...order, isRequestingCode: false } : order
+        )
+      );
+    }
+  }
+
+  // Функция для получения кода доступа
+  const handleGetAccessCode = async (orderId: number) => {
+    setAssignedOrders(prev =>
+      prev.map(order =>
+        order.id === orderId ? { ...order, isGettingCode: true } : order
+      )
+    );
+
+    try {
+      const order = assignedOrders.find(o => o.id === orderId);
+      const leg = order?.status === "order_created" ? "pickup" : "delivery";
+      
+      const result = await fetchAccessCodeView(orderId, leg, parseInt(selectedCourierId));
+      setAssignedOrders(prev =>
+        prev.map(order =>
+          order.id === orderId ? { ...order, accessCode: result.code, isGettingCode: false } : order
+        )
+      );
+    } catch (error) {
+      console.error('Error getting access code:', error);
+      setAssignedOrders(prev =>
+        prev.map(order =>
+          order.id === orderId ? { ...order, isGettingCode: false } : order
+        )
+      );
+    }
+  }
+
+  // Функция для открытия ячейки
+  const handleOpenCell = async (orderId: number) => {
+    const order = assignedOrders.find(o => o.id === orderId);
+    if (!order) return;
+
+    console.log('handleOpenCell called for orderId:', orderId, 'pin:', order.pin);
+    setAssignedOrders(prev =>
+      prev.map(order =>
+        order.id === orderId ? { ...order, isOpeningCell: true } : order
+      )
+    );
+
+    try {
+      console.log('Sending open_cell request');
+      const result = await performCellOperation(orderId, parseInt(selectedCourierId), "open_cell", { pin: order.pin }, "courier");
+      console.log('open_cell result:', result);
+      addLog({
+        role: "courier",
+        action: "open_cell",
+        data: result,
+      });
+    } catch (error) {
+      console.error('Error opening cell:', error);
+    } finally {
+      setAssignedOrders(prev =>
+        prev.map(order =>
+          order.id === orderId ? { ...order, isOpeningCell: false } : order
+        )
+      );
     }
   };
 
   // Функция для закрытия ячейки
   const handleCloseCell = async (orderId: number) => {
-    const requestData = makeFsmEnqueueRequest({
-      entity_type: "order",
-      entity_id: orderId,
-      process_name: "close_cell",
-      user_id: parseInt(selectedCourierId),
-      target_user_id: parseInt(selectedCourierId),
-      user_role: "courier",
-      metadata: {},
-    });
+    setAssignedOrders(prev =>
+      prev.map(order =>
+        order.id === orderId ? { ...order, isClosingCell: true } : order
+      )
+    );
 
     try {
-      const result = await enqueueFsmRequest(requestData);
-      console.log("Close cell result:", result);
+      const result = await performCellOperation(orderId, parseInt(selectedCourierId), "close_cell", {}, "courier");
+      addLog({
+        role: "courier",
+        action: "close_cell",
+        data: result,
+      });
     } catch (error) {
-      console.error("Error closing cell:", error);
+      console.error('Error closing cell:', error);
+    } finally {
+      setAssignedOrders(prev =>
+        prev.map(order =>
+          order.id === orderId ? { ...order, isClosingCell: false } : order
+        )
+      );
     }
   };
 
-  // Функция для проверки PIN-кода
-  const handleVerifyPin = async (orderId: number, orderLeg: string) => {
-    if (orderLeg !== "delivery") {
-      alert(language === "ru" ? "PIN доступен только для leg=delivery" : "PIN is only available for leg=delivery");
-      return;
-    }
-
-    const pin = pinCodes[orderId];
-    if (!pin) {
-      alert(language === "ru" ? "Введите PIN-код" : "Enter PIN code");
-      return;
-    }
-
-    const requestData = makeFsmEnqueueRequest({
-      entity_type: "order",
-      entity_id: orderId,
-      process_name: "confirm_courier2_delivery",
-      user_id: parseInt(selectedCourierId),
-      target_user_id: parseInt(selectedCourierId),
-      user_role: "courier",
-      metadata: {
-        pin: pin,
-      },
-    });
-
-    try {
-      const result = await enqueueFsmRequest(requestData);
-      // Обновить статус заказа или показать сообщение
-      console.log("PIN verification result:", result);
-      // Можно добавить логику обновления assignedOrders или показать сообщение
-    } catch (error) {
-      console.error("Error verifying PIN:", error);
-    }
-  };
 
   // Функция для рендера кнопок действий
   const renderCourierActionButtons = (order: any) => (
-    <div className="flex gap-2 flex-col">
-      <div className="flex gap-2">
+    <div className="flex flex-col gap-2">
+      {order.accessCode && (
+        <div className="text-xs">
+          <span className="font-medium">{t.client.accessCode || "Access Code"}: </span>
+          <span>{order.accessCode}</span>
+        </div>
+      )}
+      <div className="flex flex-row flex-wrap gap-2 items-center">
         <Button
           size="sm"
-          variant="default"
-          onClick={() => handleOpenCell(order.id)}
+          onClick={() => handleRequestAccessCode(order.id)}
+          disabled={order.isRequestingCode || order.isGettingCode}
         >
-          {language === "ru" ? "Открыть ячейку" : "Open cell"}
+          {order.isRequestingCode ? (language === "ru" ? "Запрос..." : "Requesting...") : (language === "ru" ? "Запросить код" : "Request code")}
         </Button>
         <Button
           size="sm"
-          variant="default"
-          onClick={() => handleCloseCell(order.id)}
+          onClick={() => handleGetAccessCode(order.id)}
+          disabled={order.isGettingCode || order.isRequestingCode}
         >
-          {language === "ru" ? "Закрыть ячейку" : "Close cell"}
+          {order.isGettingCode ? (language === "ru" ? "Получаю..." : "Getting...") : (language === "ru" ? "Получить код" : "Get code")}
         </Button>
-      </div>
-      <div className="flex gap-2">
         <Input
           type="text"
-          placeholder={language === "ru" ? "PIN-код" : "PIN code"}
-          value={pinCodes[order.id] || ""}
-          onChange={(e) => setPinCodes(prev => ({ ...prev, [order.id]: e.target.value }))}
-          className="w-20"
+          placeholder={language === "ru" ? "Введите PIN" : "Enter PIN"}
+          value={order.pin || ""}
+          onChange={(e) => setAssignedOrders(prev =>
+            prev.map(o => o.id === order.id ? { ...o, pin: e.target.value } : o)
+          )}
+          className="w-24 h-8 text-xs"
         />
         <Button
           size="sm"
-          onClick={() => handleVerifyPin(order.id, order.leg)}
-          disabled={order.leg !== "delivery"}
+          variant="outline"
+          onClick={() => handleOpenCell(order.id)}
+          disabled={order.isOpeningCell || order.isClosingCell || order.isRequestingError}
         >
-          {language === "ru" ? "Проверить PIN" : "Verify PIN"}
+          {order.isOpeningCell ? (language === "ru" ? "Открываю..." : "Opening...") : t.courier.openCell}
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => handleCloseCell(order.id)}
+          disabled={order.isClosingCell || order.isOpeningCell || order.isRequestingError}
+        >
+          {order.isClosingCell ? (language === "ru" ? "Закрываю..." : "Closing...") : t.courier.closeCell}
+        </Button>
+        <Button
+          size="sm"
+          variant="destructive"
+          onClick={() => handleCancelCourierOrder(order.id)}
+        >
+          {t.courier.cancelOrder}
         </Button>
       </div>
-      <Button
-        size="sm"
-        variant="outline"
-        onClick={() => handleCancelCourierOrder(order.id)}
-      >
-        {t.courier.cancelOrder}
-      </Button>
     </div>
   );
 
