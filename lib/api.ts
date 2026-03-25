@@ -288,3 +288,19 @@ export async function fetchFsmUserErrors(user_id: number, limit: number) {
   return response.json();
 }
 
+// Получение рейсов оператора
+export async function fetchOperatorTrips() {
+  const response = await fetch('/api/proxy/operator/trips', {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Request fetchOperatorTrips failed: ${response.status} ${response.statusText}`);
+  }
+
+  return response.json();
+}
+
