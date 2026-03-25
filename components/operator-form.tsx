@@ -61,12 +61,15 @@ export function OperatorForm({
   const handleRemoveTrip = async (tripId: number) => {
     try {
       // Используем унифицированный запрос для снятия рейса
+      const trip = operatorTrips.find(t => t.trip_id === tripId)
+      const driverUserId = trip?.driver_user_id
+      
       const request = makeFsmEnqueueRequest({
         entity_type: "trip",
         entity_id: tripId,
         process_name: "trip_assign_driver",
         user_id: 777, // оператор
-        target_user_id: 777, // оператор
+        target_user_id: driverUserId || 777, // водитель из API
         target_role: "driver",
         metadata: {
           action: "remove_driver"
@@ -145,7 +148,7 @@ export function OperatorForm({
       </CardHeader>
       <CardContent className="space-y-6">
         <div>
-          <h3 className="font-semibold mb-3">{language === "ru" ? "Рейсы со статусом ошибки" : "Trips with error status"}</h3>
+          <h3 className="font-semibold mb-3">{t.operator.tripFeed}</h3>
           <div className="border rounded-lg overflow-hidden">
             <Table>
               <TableHeader>
@@ -155,10 +158,7 @@ export function OperatorForm({
                   <TableHead>{language === "ru" ? "Откуда" : "From"}</TableHead>
                   <TableHead>{language === "ru" ? "Куда" : "To"}</TableHead>
                   <TableHead>{language === "ru" ? "Статус" : "Status"}</TableHead>
-                  <TableHead>{language === "ru" ? "Активен" : "Active"}</TableHead>
                   <TableHead>{language === "ru" ? "Создан" : "Created"}</TableHead>
-                  <TableHead>{language === "ru" ? "Адрес погрузки" : "Pickup Address"}</TableHead>
-                  <TableHead>{language === "ru" ? "Адрес доставки" : "Delivery Address"}</TableHead>
                   <TableHead>{language === "ru" ? "Снять" : "Remove"}</TableHead>
                 </TableRow>
               </TableHeader>
@@ -172,10 +172,7 @@ export function OperatorForm({
                     <TableCell>
                       <Badge variant="secondary">{trip.status}</Badge>
                     </TableCell>
-                    <TableCell>{trip.active ? "Да" : "Нет"}</TableCell>
                     <TableCell>{trip.created_at}</TableCell>
-                    <TableCell>{trip.pickup_address}</TableCell>
-                    <TableCell>{trip.delivery_address}</TableCell>
                     <TableCell>
                       <Button
                         size="sm"
@@ -187,109 +184,6 @@ export function OperatorForm({
                     </TableCell>
                   </TableRow>
                 ))}
-              </TableBody>
-            </Table>
-          </div>
-        </div>
-
-        <div>
-          <h3 className="font-semibold mb-3">{t.operator.tripFeed}</h3>
-          <div className="border rounded-lg overflow-hidden">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>{t.operator.tripId}</TableHead>
-                  <TableHead>{t.operator.locker}</TableHead>
-                  <TableHead>{t.operator.status}</TableHead>
-                  <TableHead>{t.operator.waitingTime}</TableHead>
-                  <TableHead>{t.operator.driver}</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {/* Sort by waiting time (newest first) */}
-                {[...driverAvailableOrders, ...driverAssignedOrders]
-                  .filter((trip) => trip.tripStatus !== "completed")
-                  .sort((a, b) => {
-                    // Mock creation dates for sorting
-                    const dateA = new Date(2025, 0, 20, 10, 0)
-                    const dateB = new Date(2025, 0, 20, 11, 0)
-                    return dateB.getTime() - dateA.getTime()
-                  })
-                  .map((trip) => {
-                    const locker = mockLockers.find((l) => l.id === trip.lockerId)
-                    const waitTime = calculateWaitingTime(new Date(2025, 0, 20, 10, 0))
-                    const hasDriver = trip.driverId !== null && trip.driverId !== undefined
-
-                    return (
-                      <TableRow key={trip.tripId}>
-                        <TableCell>{trip.tripId}</TableCell>
-                        <TableCell>{locker?.address}</TableCell>
-                        <TableCell>
-                          <Badge variant={trip.status === "available_for_driver" ? "secondary" : "default"}>
-                            {trip.status === "available_for_driver"
-                              ? language === "ru"
-                                ? "Доступен"
-                                : "Available"
-                              : trip.status === "taken_from_exchange_driver"
-                                ? language === "ru"
-                                  ? "Взят с биржи"
-                                  : "Taken from exchange"
-                                : language === "ru"
-                                  ? "Назначен оператором"
-                                  : "Assigned by operator"}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          {waitTime.hours > 0 && `${waitTime.hours}${t.operator.hours} `}
-                          {waitTime.minutes}
-                          {t.operator.minutes}
-                        </TableCell>
-                        <TableCell className="space-x-2">
-                          {hasDriver ? (
-                            <div className="flex items-center gap-2">
-                              <span className="text-sm">
-                                {language === "ru" ? "Водитель" : "Driver"} #{trip.driverId}
-                              </span>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => handleRemoveDriver(trip.tripId)}
-                              >
-                                {t.operator.remove}
-                              </Button>
-                            </div>
-                          ) : (
-                            <div className="flex items-center gap-2">
-                              <Select
-                                value={selectedDrivers[trip.tripId] || ""}
-                                onValueChange={(v) =>
-                                  setSelectedDrivers({ ...selectedDrivers, [trip.tripId]: v })
-                                }
-                              >
-                                <SelectTrigger className="w-40">
-                                  <SelectValue placeholder={t.operator.selectDriver} />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  {[200, 201, 202, 203, 204].map((driverId) => (
-                                    <SelectItem key={driverId} value={driverId.toString()}>
-                                      {language === "ru" ? "Водитель" : "Driver"} #{driverId}
-                                    </SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                              <Button
-                                size="sm"
-                                onClick={() => handleAssignDriver(trip.tripId)}
-                                disabled={!selectedDrivers[trip.tripId]}
-                              >
-                                {t.operator.assign}
-                              </Button>
-                            </div>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    )
-                  })}
               </TableBody>
             </Table>
           </div>
