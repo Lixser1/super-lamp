@@ -234,22 +234,33 @@ export function DriverForm({
  }
  };
 
-  const handleStartTrip = async (tripId?: number) => {
-    if (!selectedDriverId || !tripId) return;
-    try {
-      const result = await performCellOperation(
-        tripId,
-        parseInt(selectedDriverId),
-        "complete_trip",
-        {},
-        "driver",
-        { entityType: "trip", targetRole: "driver" }
-      );
-      console.log('complete_trip result:', result);
-    } catch (error) {
-      console.error('Error completing trip:', error);
-    }
-  };
+ const handleStartTrip = async (tripId?: number) => {
+ if (!selectedDriverId || !tripId) return;
+ try {
+ const result = await performCellOperation(
+ tripId,
+ parseInt(selectedDriverId),
+ "complete_trip",
+ {},
+ "driver",
+ { entityType: "trip", targetRole: "driver" }
+ );
+ console.log('complete_trip result:', result);
+      
+ // Очищаем данные после успешного завершения рейса
+ setTripData(null);
+ setTripId(null);
+ setTripState("at_from_locker");
+ setTakenDirectOrders([]);
+ setSelectedDirectOrders([]);
+ setTakenReverseOrders([]);
+ setSelectedReverseOrders([]);
+ } catch (error: any) {
+ console.error('Error completing trip:', error);
+ const errorMessage = error?.response?.data?.message || error?.message || (language === "ru" ? "Ошибка завершения рейса" : "Error completing trip");
+ alert(errorMessage);
+ }
+ };
 
   const handleStartTripByDirection = async (directionId: number) => {
     if (!selectedDriverId) return;
@@ -411,16 +422,13 @@ export function DriverForm({
                             >
                               {t.driver.startLoading}
                             </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={async () => {
-                                await handleCompleteLoading(Number(directionId));
-                                setLoadingOrders([]);
-                              }}
-                            >
-                              {t.driver.completeLoading}
-                            </Button>
+<Button
+ size="sm"
+ variant="outline"
+ onClick={() => handleCompleteLoadingWithValidation(Number(directionId))}
+ >
+ {t.driver.completeLoading}
+</Button>
                           </div>
                         </TableCell>
                         <TableCell></TableCell>
