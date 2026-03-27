@@ -304,3 +304,19 @@ export async function fetchOperatorTrips() {
   return response.json();
 }
 
+// Получение локеров оператора
+export async function fetchOperatorLockers() {
+  const response = await fetch('/api/proxy/operator/lockers', {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Request fetchOperatorLockers failed: ${response.status} ${response.statusText}`);
+  }
+
+  return response.json();
+}
+

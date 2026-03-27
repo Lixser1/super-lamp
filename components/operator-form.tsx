@@ -1,14 +1,14 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import React, { useState, useEffect, Fragment } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Badge } from "@/components/ui/badge"
 import { useLanguage } from "@/lib/language-context"
-import { mockLockers, mockOrders, mockCouriers, mockDriverExchangeOrders, mockDriverAssignedOrders } from "@/lib/mock-data"
-import { fetchOperatorTrips, enqueueFsmRequest, makeFsmEnqueueRequest } from "@/lib/api"
+import { mockDriverExchangeOrders, mockDriverAssignedOrders } from "@/lib/mock-data"
+import { fetchOperatorTrips, fetchOperatorLockers, fetchUsers, enqueueFsmRequest, makeFsmEnqueueRequest } from "@/lib/api"
 
 interface OperatorFormProps {
   addLog: (log: any) => void
@@ -24,11 +24,15 @@ export function OperatorForm({
   setDriverAssignedOrders,
 }: OperatorFormProps) {
   const [expandedLockers, setExpandedLockers] = useState<number[]>([])
-  const [lockerOrders, setLockerOrders] = useState<{ [key: number]: any[] }>({})
   const [selectedCouriers, setSelectedCouriers] = useState<{ [key: number]: string }>({})
   const [selectedDrivers, setSelectedDrivers] = useState<{ [key: number]: string }>({})
   const [operatorTrips, setOperatorTrips] = useState<any[]>([])
   const [loadingOperatorTrips, setLoadingOperatorTrips] = useState(false)
+  const [lockers, setLockers] = useState<any[]>([])
+  const [loadingLockers, setLoadingLockers] = useState(false)
+  const [users, setUsers] = useState<any[]>([])
+  const [loadingUsers, setLoadingUsers] = useState(false)
+  const [operatorId, setOperatorId] = useState<number | null>(null)
 
   // Загрузка рейсов оператора при монтировании компонента
   useEffect(() => {
@@ -46,6 +50,46 @@ export function OperatorForm({
 
     loadOperatorTrips()
   }, [])
+
+  // Загрузка локеров оператора
+  useEffect(() => {
+    const loadOperatorLockers = async () => {
+      setLoadingLockers(true)
+      try {
+        const lockersData = await fetchOperatorLockers()
+        setLockers(lockersData)
+      } catch (error) {
+        console.error('Error loading operator lockers:', error)
+      } finally {
+        setLoadingLockers(false)
+      }
+    }
+
+    loadOperatorLockers()
+  }, [])
+
+  // Загрузка списка пользователей
+  useEffect(() => {
+    const loadUsers = async () => {
+      setLoadingUsers(true)
+      try {
+        const usersData = await fetchUsers()
+        setUsers(usersData)
+        
+        // Находим id оператора
+        const operator = usersData.find((u: any) => u.role_name === 'operator')
+        if (operator) {
+          setOperatorId(operator.id)
+        }
+      } catch (error) {
+        console.error('Error loading users:', error)
+      } finally {
+        setLoadingUsers(false)
+      }
+    }
+
+    loadUsers()
+  }, [])
   const { t, language } = useLanguage()
 
   const handleAction = (role: string, action: string, extraData?: any) => {
@@ -60,24 +104,17 @@ export function OperatorForm({
 
   const handleRemoveTrip = async (tripId: number) => {
     try {
-      // Используем унифицированный запрос для снятия рейса
       const trip = operatorTrips.find(t => t.trip_id === tripId)
       const driverUserId = trip?.driver_user_id
       
-      const request = makeFsmEnqueueRequest({
-        entity_type: "trip",
-        entity_id: tripId,
-        process_name: "trip_assign_driver",
-        user_id: 777, // оператор
-        target_user_id: driverUserId || 777, // водитель из API
-        target_role: "driver",
-        metadata: {
-          action: "remove_driver"
-        }
+      await sendFsmRequest({
+        entityType: 'trip',
+        entityId: tripId,
+        processName: 'trip_remove_driver',
+        targetUserId: driverUserId,
+        targetRole: 'driver',
       })
 
-      await enqueueFsmRequest(request)
-      
       // Обновляем список рейсов после успешного снятия
       const updatedTrips = await fetchOperatorTrips()
       setOperatorTrips(updatedTrips)
@@ -93,9 +130,6 @@ export function OperatorForm({
       setExpandedLockers(expandedLockers.filter((id) => id !== lockerId))
     } else {
       setExpandedLockers([...expandedLockers, lockerId])
-      // Load orders for this locker
-      const orders = mockOrders.filter((o) => o.lockerId === lockerId && o.status === "assigned_to_pudo")
-      setLockerOrders({ ...lockerOrders, [lockerId]: orders })
     }
   }
 
@@ -106,24 +140,66 @@ export function OperatorForm({
     }
   }
 
-  const handleAssignDriver = (tripId: number) => {
+  const handleAssignDriver = async (tripId: number) => {
     const driverId = selectedDrivers[tripId]
     if (driverId) {
-      setDriverAssignedOrders(
-        driverAssignedOrders.map((order) =>
-          order.tripId === tripId
-            ? { ...order, driverId: Number.parseInt(driverId), status: "assigned_by_operator_driver" }
-            : order,
-        ),
-      )
-      handleAction("operator", "assign_driver", { trip_id: tripId, driver_id: driverId })
+      try {
+        await sendFsmRequest({
+          entityType: 'trip',
+          entityId: tripId,
+          processName: 'trip_assign_driver',
+          targetUserId: Number(driverId),
+          targetRole: 'driver',
+        })
+        
+        // Обновляем список рейсов после успешного назначения
+        const updatedTrips = await fetchOperatorTrips()
+        setOperatorTrips(updatedTrips)
+        
+        // Очищаем выбранного водителя
+        setSelectedDrivers({ ...selectedDrivers, [tripId]: '' })
+      } catch (error: any) {
+        console.error('Error assigning driver:', error)
+        const errorMessage = error?.response?.data?.message || error?.message || (language === "ru" ? "Ошибка назначения водителя" : "Error assigning driver")
+        alert(errorMessage)
+      }
     }
   }
 
-  const handleRemoveCourier = (orderId: number) => {
-    // Note: This would need access to assignedOrders state, which is in parent
-    // For now, just log the action
-    handleAction("operator", "remove_courier", { order_id: orderId })
+  const handleRemoveCourier = async (order: any) => {
+    const orderId = order.order_id
+    const courierId = order.delivery_courier_id
+    const status = order.status
+    
+    // Статусы для order_remove_courier2
+    const courier2Statuses = [
+      'order_in_transit_to_post2',
+      'order_courier2_assigned',
+      'order_parcel_confirmed_post2',
+      'order_courier2_parcel_delivered'
+    ]
+    
+    const processName = courier2Statuses.includes(status) 
+      ? 'order_remove_courier2' 
+      : 'order_remove_courier1'
+    
+    try {
+      await sendFsmRequest({
+        entityType: 'order',
+        entityId: orderId,
+        processName: processName,
+        targetUserId: courierId,
+        targetRole: 'courier',
+      })
+      
+      // Обновляем список локеров после успешного снятия
+      const updatedLockers = await fetchOperatorLockers()
+      setLockers(updatedLockers)
+    } catch (error: any) {
+      console.error('Error removing courier:', error)
+      const errorMessage = error?.response?.data?.message || error?.message || (language === "ru" ? "Ошибка снятия курьера" : "Error removing courier")
+      alert(errorMessage)
+    }
   }
 
   const handleRemoveDriver = (tripId: number) => {
@@ -133,12 +209,31 @@ export function OperatorForm({
     handleAction("operator", "remove_driver", { trip_id: tripId })
   }
 
-  const calculateWaitingTime = (createdDate: Date) => {
-    const now = new Date()
-    const diffMs = now.getTime() - createdDate.getTime()
-    const diffHours = Math.floor(diffMs / (1000 * 60 * 60))
-    const diffMinutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60))
-    return { hours: diffHours, minutes: diffMinutes }
+  // Переиспользуемая функция для FSM запросов
+  const sendFsmRequest = async (params: {
+    entityType: 'order' | 'trip'
+    entityId: number
+    processName: 'order_remove_courier1' | 'order_remove_courier2' | 'trip_remove_driver' | 'trip_assign_driver'
+    targetUserId?: number
+    targetRole: 'driver' | 'courier'
+    metadata?: Record<string, unknown>
+  }) => {
+    if (!operatorId) {
+      console.error('Operator ID not found')
+      return
+    }
+
+    const request = makeFsmEnqueueRequest({
+      entity_type: params.entityType,
+      entity_id: params.entityId,
+      process_name: params.processName,
+      user_id: operatorId,
+      target_user_id: params.targetUserId,
+      target_role: params.targetRole,
+      metadata: params.metadata,
+    })
+
+    return enqueueFsmRequest(request)
   }
 
   return (
@@ -159,31 +254,80 @@ export function OperatorForm({
                   <TableHead>{language === "ru" ? "Куда" : "To"}</TableHead>
                   <TableHead>{language === "ru" ? "Статус" : "Status"}</TableHead>
                   <TableHead>{language === "ru" ? "Создан" : "Created"}</TableHead>
-                  <TableHead>{language === "ru" ? "Снять" : "Remove"}</TableHead>
+                  <TableHead>{language === "ru" ? "Действие" : "Action"}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {operatorTrips.map((trip) => (
-                  <TableRow key={trip.trip_id}>
-                    <TableCell>{trip.trip_id}</TableCell>
-                    <TableCell>{trip.driver_user_id || "-"}</TableCell>
-                    <TableCell>{trip.from_city}</TableCell>
-                    <TableCell>{trip.to_city}</TableCell>
-                    <TableCell>
-                      <Badge variant="secondary">{trip.status}</Badge>
-                    </TableCell>
-                    <TableCell>{trip.created_at}</TableCell>
-                    <TableCell>
-                      <Button
-                        size="sm"
-                        variant="destructive"
-                        onClick={() => handleRemoveTrip(trip.trip_id)}
-                      >
-                        {language === "ru" ? "Снять" : "Remove"}
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
+                {operatorTrips.map((trip) => {
+                  // Фильтруем пользователей по роли driver
+                  const drivers = users?.filter((u: any) => {
+                    return u.role_name === 'driver';
+                  }) || []
+
+                  const hasDriver = trip.driver_user_id !== null && trip.driver_user_id !== undefined
+
+                  return (
+                    <TableRow key={trip.trip_id}>
+                      <TableCell>{trip.trip_id}</TableCell>
+                      <TableCell>{trip.driver_user_id || "-"}</TableCell>
+                      <TableCell>{trip.from_city}</TableCell>
+                      <TableCell>{trip.to_city}</TableCell>
+                      <TableCell>
+                        <Badge variant="secondary">{trip.status}</Badge>
+                      </TableCell>
+                      <TableCell>{trip.created_at}</TableCell>
+                      <TableCell className="space-x-2">
+                        {!hasDriver ? (
+                          <div className="flex items-center gap-2">
+                            <Select
+                              value={selectedDrivers[trip.trip_id] || ""}
+                              onValueChange={(v) =>
+                                setSelectedDrivers({ ...selectedDrivers, [trip.trip_id]: v })
+                              }
+                            >
+                              <SelectTrigger className="w-40">
+                                <SelectValue placeholder={language === "ru" ? "Выбрать" : "Select"} />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {drivers && drivers.length > 0 ? (
+                                  drivers
+                                    .filter((d: any) => d.id !== undefined && d.id !== null && d.id !== '' && d.name)
+                                    .map((driver: any) => (
+                                      <SelectItem
+                                        key={`driver-${trip.trip_id}-${driver.id}`}
+                                        value={String(driver.id)}
+                                      >
+                                        {driver.name}
+                                      </SelectItem>
+                                    ))
+                                ) : (
+                                  <div className="p-2 text-sm text-muted-foreground">
+                                    {language === "ru" ? "Нет доступных водителей" : "No drivers available"}
+                                  </div>
+                                )}
+                              </SelectContent>
+                            </Select>
+                            <Button
+                              size="sm"
+                              onClick={() => handleAssignDriver(trip.trip_id)}
+                              disabled={!selectedDrivers[trip.trip_id]}
+                            >
+                              {language === "ru" ? "Назначить" : "Assign"}
+                            </Button>
+                          </div>
+                        ) : (
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            onClick={() => handleRemoveTrip(trip.trip_id)}
+                          >
+                            {language === "ru" ? "Снять" : "Remove"}
+                          </Button>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
               </TableBody>
             </Table>
           </div>
@@ -202,126 +346,144 @@ export function OperatorForm({
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {mockLockers
-                  .map((locker) => {
-                    const waitingOrders = mockOrders.filter(
-                      (o) => o.lockerId === locker.id && o.status === "assigned_to_pudo" && !o.courierId,
-                    )
-                    const assignedCouriers = new Set(
-                      mockOrders.filter((o) => o.lockerId === locker.id && o.courierId).map((o) => o.courierId),
-                    ).size
-                    return { locker, waitingOrders, assignedCouriers }
-                  })
-                  .sort((a, b) => b.waitingOrders.length - a.waitingOrders.length)
-                  .map(({ locker, waitingOrders, assignedCouriers }) => {
-                    const isExpanded = expandedLockers.includes(locker.id)
+                {lockers && lockers.length > 0 ? lockers.map((locker) => {
+                  const isExpanded = expandedLockers.includes(locker.locker_id)
 
-                    return (
-                      <>
-                        <TableRow key={locker.id}>
-                          <TableCell>
-                            <Button variant="ghost" size="sm" onClick={() => toggleLocker(locker.id)}>
-                              {isExpanded ? "▼" : "▶"}
-                            </Button>
+                  return (
+                    <Fragment key={locker.locker_id}>
+                      <TableRow>
+                        <TableCell>
+                          <Button variant="ghost" size="sm" onClick={() => toggleLocker(locker.locker_id)}>
+                            {isExpanded ? "▼" : "▶"}
+                          </Button>
+                        </TableCell>
+                        <TableCell>
+                          {locker.locker_id} / {locker.city}
+                        </TableCell>
+                        <TableCell>{locker.orders_waiting_courier ?? 0}</TableCell>
+                        <TableCell>{locker.orders_assigned ?? 0}</TableCell>
+                      </TableRow>
+                      {isExpanded && locker.orders && locker.orders.length > 0 && (
+                        <TableRow>
+                          <TableCell colSpan={4} className="bg-muted/50">
+                            <div className="p-4">
+                              <Table>
+                                <TableHeader>
+                                  <TableRow>
+                                    <TableHead>{t.operator.orderId}</TableHead>
+                                    <TableHead>{t.operator.cell}</TableHead>
+                                    <TableHead>{t.operator.status}</TableHead>
+                                    <TableHead>{t.operator.waitingTime}</TableHead>
+                                    <TableHead>{t.operator.courier}</TableHead>
+                                  </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                  {locker.orders.map((order: any) => {
+                                    const updatedAt = order.updated_at ? new Date(order.updated_at) : new Date()
+                                    const now = new Date()
+                                    const diffMs = now.getTime() - updatedAt.getTime()
+                                    const diffHours = Math.floor(diffMs / (1000 * 60 * 60))
+                                    const diffMinutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60))
+                                    
+                                    const hasCourier = order.delivery_courier_id !== null && order.delivery_courier_id !== undefined
+
+                                    // Фильтруем пользователей по роли courier
+                                    const couriers = users?.filter((u: any) => {
+                                      const role = u.role_name || u.role || u.user_role || '';
+                                      return String(role).toLowerCase().includes('courier');
+                                    }) || []
+
+                                    const courierKey = `courier-${locker.locker_id}-${order.order_id}`
+
+                                    return (
+                                      <TableRow key={order.order_id}>
+                                        <TableCell>{order.order_id}</TableCell>
+                                        <TableCell>{order.dest_cell_id}</TableCell>
+                                        <TableCell>
+                                          <Badge variant="secondary">
+                                            {order.status}
+                                          </Badge>
+                                        </TableCell>
+                                        <TableCell>
+                                          {diffHours > 0 && `${diffHours}${t.operator.hours} `}
+                                          {diffMinutes}
+                                          {t.operator.minutes}
+                                        </TableCell>
+                                        <TableCell className="space-x-2">
+                                          {hasCourier ? (
+                                            <div className="flex items-center gap-2">
+                                              <span className="text-sm">
+                                                {language === "ru" ? "Курьер" : "Courier"} #{order.delivery_courier_id}
+                                              </span>
+                                              <Button
+                                                size="sm"
+                                                variant="outline"
+                                                onClick={() => handleRemoveCourier(order)}
+                                              >
+                                                {t.operator.remove}
+                                              </Button>
+                                            </div>
+                                          ) : (
+                                            <div className="flex items-center gap-2">
+                                              <Select
+                                                value={selectedCouriers[order.order_id] || ""}
+                                                onValueChange={(v) =>
+                                                  setSelectedCouriers({ ...selectedCouriers, [order.order_id]: v })
+                                                }
+                                              >
+                                                <SelectTrigger className="w-40">
+                                                  <SelectValue placeholder={t.operator.selectCourier} />
+                                                </SelectTrigger>
+                                                <SelectContent>
+                                                  {couriers && couriers.length > 0 ? (
+                                                    couriers
+                                                      .filter((c: any) => (c.user_id ?? c.id) !== undefined && (c.user_id ?? c.id) !== null && (c.user_id ?? c.id) !== '')
+                                                      .map((courier: any) => {
+                                                        const courierId = courier.user_id ?? courier.id;
+                                                        return (
+                                                          <SelectItem
+                                                            key={`${courierKey}-${courierId}`}
+                                                            value={String(courierId)}
+                                                          >
+                                                            {courier.name || courier.login || `Courier #${courierId}`}
+                                                          </SelectItem>
+                                                        );
+                                                      })
+                                                  ) : (
+                                                    <div className="p-2 text-sm text-muted-foreground">
+                                                      {language === "ru" ? "Нет доступных курьеров" : "No couriers available"}
+                                                    </div>
+                                                  )}
+                                                </SelectContent>
+                                              </Select>
+                                              <Button
+                                                size="sm"
+                                                onClick={() => handleAssignCourier(order.order_id, locker.locker_id)}
+                                                disabled={!selectedCouriers[order.order_id]}
+                                              >
+                                                {t.operator.assign}
+                                              </Button>
+                                            </div>
+                                          )}
+                                        </TableCell>
+                                      </TableRow>
+                                    )
+                                  })}
+                                </TableBody>
+                              </Table>
+                            </div>
                           </TableCell>
-                          <TableCell>
-                            {locker.id} / {locker.address}
-                          </TableCell>
-                          <TableCell>{waitingOrders.length}</TableCell>
-                          <TableCell>{assignedCouriers}</TableCell>
                         </TableRow>
-                        {isExpanded && lockerOrders[locker.id] && (
-                          <TableRow>
-                            <TableCell colSpan={4} className="bg-muted/50">
-                              <div className="p-4">
-                                <Table>
-                                  <TableHeader>
-                                    <TableRow>
-                                      <TableHead>{t.operator.orderId}</TableHead>
-                                      <TableHead>{t.operator.cell}</TableHead>
-                                      <TableHead>{t.operator.status}</TableHead>
-                                      <TableHead>{t.operator.waitingTime}</TableHead>
-                                      <TableHead>{t.operator.courier}</TableHead>
-                                    </TableRow>
-                                  </TableHeader>
-                                  <TableBody>
-                                    {lockerOrders[locker.id].map((order) => {
-                                      const waitTime = calculateWaitingTime(new Date(2025, 0, 20, 9, 0))
-                                      const hasCourier =
-                                        order.courierId !== null && order.courierId !== undefined
-
-                                      return (
-                                        <TableRow key={order.id}>
-                                          <TableCell>{order.id}</TableCell>
-                                          <TableCell>{order.cell}</TableCell>
-                                          <TableCell>
-                                            <Badge variant="secondary">
-                                              {language === "ru" ? "Ожидает курьера" : "Waiting for courier"}
-                                            </Badge>
-                                          </TableCell>
-                                          <TableCell>
-                                            {waitTime.hours > 0 && `${waitTime.hours}${t.operator.hours} `}
-                                            {waitTime.minutes}
-                                            {t.operator.minutes}
-                                          </TableCell>
-                                          <TableCell className="space-x-2">
-                                            {hasCourier ? (
-                                              <div className="flex items-center gap-2">
-                                                <span className="text-sm">
-                                                  {language === "ru" ? "Курьер" : "Courier"} #{order.courierId}
-                                                </span>
-                                                <Button
-                                                  size="sm"
-                                                  variant="outline"
-                                                  onClick={() => handleRemoveCourier(order.id)}
-                                                >
-                                                  {t.operator.remove}
-                                                </Button>
-                                              </div>
-                                            ) : (
-                                              <div className="flex items-center gap-2">
-                                                <Select
-                                                  value={selectedCouriers[order.id] || ""}
-                                                  onValueChange={(v) =>
-                                                    setSelectedCouriers({ ...selectedCouriers, [order.id]: v })
-                                                  }
-                                                >
-                                                  <SelectTrigger className="w-40">
-                                                    <SelectValue placeholder={t.operator.selectCourier} />
-                                                  </SelectTrigger>
-                                                  <SelectContent>
-                                                    {mockCouriers.map((courier) => (
-                                                      <SelectItem
-                                                        key={courier.id}
-                                                        value={courier.id.toString()}
-                                                      >
-                                                        {courier.name}
-                                                      </SelectItem>
-                                                    ))}
-                                                  </SelectContent>
-                                                </Select>
-                                                <Button
-                                                  size="sm"
-                                                  onClick={() => handleAssignCourier(order.id, locker.id)}
-                                                  disabled={!selectedCouriers[order.id]}
-                                                >
-                                                  {t.operator.assign}
-                                                </Button>
-                                              </div>
-                                            )}
-                                          </TableCell>
-                                        </TableRow>
-                                      )
-                                    })}
-                                  </TableBody>
-                                </Table>
-                              </div>
-                            </TableCell>
-                          </TableRow>
-                        )}
-                      </>
-                    )
-                  })}
+                      )}
+                    </Fragment>
+                  )
+                }) : (
+                  <TableRow>
+                    <TableCell colSpan={4} className="text-center py-4">
+                      {language === "ru" ? "Загрузка постаматов..." : "Loading lockers..."}
+                    </TableCell>
+                  </TableRow>
+                )}
               </TableBody>
             </Table>
           </div>
