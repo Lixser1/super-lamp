@@ -6,9 +6,11 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Badge } from "@/components/ui/badge"
+import { Input } from "@/components/ui/input"
 import { useLanguage } from "@/lib/language-context"
 import { mockDriverExchangeOrders, mockDriverAssignedOrders } from "@/lib/mock-data"
-import { fetchOperatorTrips, fetchOperatorLockers, fetchUsers, enqueueFsmRequest, makeFsmEnqueueRequest } from "@/lib/api"
+import { fetchOperatorTrips, fetchOperatorLockers, fetchUsers, enqueueFsmRequest, makeFsmEnqueueRequest, fetchAccessCodeView } from "@/lib/api"
+import { performCellOperation } from "@/lib/utils"
 
 interface OperatorFormProps {
   addLog: (log: any) => void
@@ -33,6 +35,30 @@ export function OperatorForm({
   const [users, setUsers] = useState<any[]>([])
   const [loadingUsers, setLoadingUsers] = useState(false)
   const [operatorId, setOperatorId] = useState<number | null>(null)
+
+  // Состояния для работы с ячейками и пинами
+  const [orderCellStates, setOrderCellStates] = useState<{
+    [key: number]: {
+      accessCode?: string;
+      isRequestingCode?: boolean;
+      isGettingCode?: boolean;
+      isOpeningCell?: boolean;
+      isClosingCell?: boolean;
+      isRequestingError?: boolean;
+    }
+  }>({})
+  const [tripCellStates, setTripCellStates] = useState<{
+    [tripId: number]: {
+      accessCode?: string;
+      isRequestingCode?: boolean;
+      isGettingCode?: boolean;
+      isOpeningCell?: boolean;
+      isClosingCell?: boolean;
+      isRequestingError?: boolean;
+    }
+  }>({})
+  const [pins, setPins] = useState<{ [key: number]: string }>({})
+  const [tripPins, setTripPins] = useState<{ [tripId: number]: string }>({})
 
   // Загрузка рейсов оператора при монтировании компонента
   useEffect(() => {
@@ -236,6 +262,220 @@ export function OperatorForm({
     return enqueueFsmRequest(request)
   }
 
+  // Определение leg на основе статуса заказа
+  const getLegFromStatus = (status: string): "pickup" | "delivery" => {
+    const deliveryStatuses = [
+      'order_in_transit_to_post2',
+      'order_courier2_assigned',
+      'order_parcel_confirmed_post2',
+      'order_courier2_parcel_delivered'
+    ]
+    return deliveryStatuses.includes(status) ? "delivery" : "pickup"
+  }
+
+  // Функции для работы с ячейками заказов в постаматах
+  const handleRequestCode = async (orderId: number, cellId: number, status: string, targetUserId: number) => {
+    if (!operatorId) return
+    const leg = getLegFromStatus(status)
+    setOrderCellStates(prev => ({
+      ...prev,
+      [orderId]: { ...prev[orderId], isRequestingCode: true }
+    }))
+
+    try {
+      await performCellOperation(orderId, operatorId, "request_locker_access_code", { leg }, "operator", { targetRole: "courier", leg }, targetUserId)
+    } catch (error) {
+      console.error('Error requesting code:', error)
+    } finally {
+      setOrderCellStates(prev => ({
+        ...prev,
+        [orderId]: { ...prev[orderId], isRequestingCode: false }
+      }))
+    }
+  }
+
+  const handleGetCode = async (orderId: number, cellId: number, status: string, targetUserId: number) => {
+    if (!operatorId) return
+    const leg = getLegFromStatus(status)
+    setOrderCellStates(prev => ({
+      ...prev,
+      [orderId]: { ...prev[orderId], isGettingCode: true }
+    }))
+
+    try {
+      const result = await fetchAccessCodeView(orderId, leg, operatorId)
+      setOrderCellStates(prev => ({
+        ...prev,
+        [orderId]: { ...prev[orderId], accessCode: result.pin, isGettingCode: false }
+      }))
+    } catch (error) {
+      console.error('Error getting code:', error)
+      setOrderCellStates(prev => ({
+        ...prev,
+        [orderId]: { ...prev[orderId], isGettingCode: false }
+      }))
+    }
+  }
+
+  const handleOpenCell = async (orderId: number, cellId: number, status: string, targetUserId: number) => {
+    if (!operatorId) return
+    const leg = getLegFromStatus(status)
+    setOrderCellStates(prev => ({
+      ...prev,
+      [orderId]: { ...prev[orderId], isOpeningCell: true }
+    }))
+
+    try {
+      await performCellOperation(cellId, operatorId, "open_cell", { pin: pins[orderId] }, "operator", { targetRole: "courier", leg }, targetUserId)
+    } catch (error) {
+      console.error('Error opening cell:', error)
+    } finally {
+      setOrderCellStates(prev => ({
+        ...prev,
+        [orderId]: { ...prev[orderId], isOpeningCell: false }
+      }))
+    }
+  }
+
+  const handleCloseCell = async (orderId: number, cellId: number, status: string, targetUserId: number) => {
+    if (!operatorId) return
+    const leg = getLegFromStatus(status)
+    setOrderCellStates(prev => ({
+      ...prev,
+      [orderId]: { ...prev[orderId], isClosingCell: true }
+    }))
+
+    try {
+      await performCellOperation(cellId, operatorId, "close_cell", { leg }, "operator", { targetRole: "courier", leg }, targetUserId)
+    } catch (error) {
+      console.error('Error closing cell:', error)
+    } finally {
+      setOrderCellStates(prev => ({
+        ...prev,
+        [orderId]: { ...prev[orderId], isClosingCell: false }
+      }))
+    }
+  }
+
+  const handleCellError = async (orderId: number, cellId: number, status: string, targetUserId: number) => {
+    if (!operatorId) return
+    const leg = getLegFromStatus(status)
+    setOrderCellStates(prev => ({
+      ...prev,
+      [orderId]: { ...prev[orderId], isRequestingError: true }
+    }))
+
+    try {
+      await performCellOperation(orderId, operatorId, "request_locker_access_code", { leg }, "operator", { targetRole: "courier", leg }, targetUserId)
+    } catch (error) {
+      console.error('Error requesting error:', error)
+    } finally {
+      setOrderCellStates(prev => ({
+        ...prev,
+        [orderId]: { ...prev[orderId], isRequestingError: false }
+      }))
+    }
+  }
+
+  // Функции для работы с ячейками рейсов
+  const handleTripRequestCode = async (tripId: number, cellId: number, targetUserId: number) => {
+    if (!operatorId) return
+    setTripCellStates(prev => ({
+      ...prev,
+      [tripId]: { ...prev[tripId], isRequestingCode: true }
+    }))
+
+    try {
+      await performCellOperation(tripId, operatorId, "request_locker_access_code", { leg: "pickup" }, "operator", { targetRole: "driver", leg: "pickup" }, targetUserId)
+    } catch (error) {
+      console.error('Error requesting code:', error)
+    } finally {
+      setTripCellStates(prev => ({
+        ...prev,
+        [tripId]: { ...prev[tripId], isRequestingCode: false }
+      }))
+    }
+  }
+
+  const handleTripGetCode = async (tripId: number, cellId: number, targetUserId: number) => {
+    if (!operatorId) return
+    setTripCellStates(prev => ({
+      ...prev,
+      [tripId]: { ...prev[tripId], isGettingCode: true }
+    }))
+
+    try {
+      const result = await fetchAccessCodeView(tripId, "pickup", operatorId)
+      setTripCellStates(prev => ({
+        ...prev,
+        [tripId]: { ...prev[tripId], accessCode: result.pin, isGettingCode: false }
+      }))
+    } catch (error) {
+      console.error('Error getting code:', error)
+      setTripCellStates(prev => ({
+        ...prev,
+        [tripId]: { ...prev[tripId], isGettingCode: false }
+      }))
+    }
+  }
+
+  const handleTripOpenCell = async (tripId: number, cellId: number, targetUserId: number) => {
+    if (!operatorId) return
+    setTripCellStates(prev => ({
+      ...prev,
+      [tripId]: { ...prev[tripId], isOpeningCell: true }
+    }))
+
+    try {
+      await performCellOperation(cellId, operatorId, "open_cell", { pin: tripPins[tripId] }, "operator", { targetRole: "driver", leg: "pickup" }, targetUserId)
+    } catch (error) {
+      console.error('Error opening cell:', error)
+    } finally {
+      setTripCellStates(prev => ({
+        ...prev,
+        [tripId]: { ...prev[tripId], isOpeningCell: false }
+      }))
+    }
+  }
+
+  const handleTripCloseCell = async (tripId: number, cellId: number, targetUserId: number) => {
+    if (!operatorId) return
+    setTripCellStates(prev => ({
+      ...prev,
+      [tripId]: { ...prev[tripId], isClosingCell: true }
+    }))
+
+    try {
+      await performCellOperation(cellId, operatorId, "close_cell", { leg: "pickup" }, "operator", { targetRole: "driver", leg: "pickup" }, targetUserId)
+    } catch (error) {
+      console.error('Error closing cell:', error)
+    } finally {
+      setTripCellStates(prev => ({
+        ...prev,
+        [tripId]: { ...prev[tripId], isClosingCell: false }
+      }))
+    }
+  }
+
+  const handleTripCellError = async (tripId: number, cellId: number, targetUserId: number) => {
+    if (!operatorId) return
+    setTripCellStates(prev => ({
+      ...prev,
+      [tripId]: { ...prev[tripId], isRequestingError: true }
+    }))
+
+    try {
+      await performCellOperation(tripId , operatorId, "request_locker_access_code", { leg: "pickup" }, "operator", { targetRole: "driver", leg: "pickup" }, targetUserId)
+    } catch (error) {
+      console.error('Error requesting error:', error)
+    } finally {
+      setTripCellStates(prev => ({
+        ...prev,
+        [tripId]: { ...prev[tripId], isRequestingError: false }
+      }))
+    }
+  }
+
   return (
     <Card>
       <CardHeader>
@@ -316,13 +556,79 @@ export function OperatorForm({
                             </Button>
                           </div>
                         ) : (
-                          <Button
-                            size="sm"
-                            variant="destructive"
-                            onClick={() => handleRemoveTrip(trip.trip_id)}
-                          >
-                            {language === "ru" ? "Снять" : "Remove"}
-                          </Button>
+                          <div className="flex flex-col gap-2">
+                            <div className="flex items-center gap-2">
+                              <Button
+                                size="sm"
+                                variant="destructive"
+                                onClick={() => handleRemoveTrip(trip.trip_id)}
+                              >
+                                {language === "ru" ? "Снять" : "Remove"}
+                              </Button>
+                            </div>
+                            {/* Кнопки работы с ячейками */}
+                            <div className="flex flex-col gap-1 mt-2 p-2 border rounded bg-muted/30">
+                              <div className="text-xs font-medium mb-1">{language === "ru" ? "Управление ячейкой" : "Cell Control"}</div>
+                              <div className="flex flex-wrap gap-1">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => handleTripRequestCode(trip.trip_id, trip.trip_id, trip.driver_user_id)}
+                                  disabled={!operatorId || tripCellStates[trip.trip_id]?.isRequestingCode || tripCellStates[trip.trip_id]?.isGettingCode || tripCellStates[trip.trip_id]?.isOpeningCell || tripCellStates[trip.trip_id]?.isClosingCell || tripCellStates[trip.trip_id]?.isRequestingError}
+                                >
+                                  {tripCellStates[trip.trip_id]?.isRequestingCode ? (language === "ru" ? "Запрос..." : "Request...") : (language === "ru" ? "Запросить код" : "Request Code")}
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => handleTripGetCode(trip.trip_id, trip.trip_id, trip.driver_user_id)}
+                                  disabled={!operatorId || tripCellStates[trip.trip_id]?.isGettingCode || tripCellStates[trip.trip_id]?.isRequestingCode}
+                                >
+                                  {tripCellStates[trip.trip_id]?.isGettingCode ? (language === "ru" ? "Получ..." : "Getting...") : (language === "ru" ? "Получить код" : "Get Code")}
+                                </Button>
+                              </div>
+                              {tripCellStates[trip.trip_id]?.accessCode && (
+                                <div className="flex items-center gap-1 mt-1">
+                                  <Badge variant="default" className="text-xs">
+                                    {language === "ru" ? "Код:" : "Code:"} {tripCellStates[trip.trip_id].accessCode}
+                                  </Badge>
+                                </div>
+                              )}
+                              <div className="flex items-center gap-1 mt-1">
+                                <Input
+                                  type="text"
+                                  placeholder="PIN"
+                                  value={tripPins[trip.trip_id] || ""}
+                                  onChange={(e) => setTripPins({ ...tripPins, [trip.trip_id]: e.target.value })}
+                                  className="w-20 h-7 text-xs"
+                                />
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => handleTripOpenCell(trip.trip_id, trip.trip_id, trip.driver_user_id)}
+                                  disabled={!operatorId || tripCellStates[trip.trip_id]?.isOpeningCell || tripCellStates[trip.trip_id]?.isClosingCell || tripCellStates[trip.trip_id]?.isRequestingError || !tripPins[trip.trip_id]}
+                                >
+                                  {tripCellStates[trip.trip_id]?.isOpeningCell ? (language === "ru" ? "Открываю..." : "Opening...") : (language === "ru" ? "Открыть" : "Open")}
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => handleTripCloseCell(trip.trip_id, trip.trip_id, trip.driver_user_id)}
+                                  disabled={!operatorId || tripCellStates[trip.trip_id]?.isClosingCell || tripCellStates[trip.trip_id]?.isOpeningCell || tripCellStates[trip.trip_id]?.isRequestingError}
+                                >
+                                  {tripCellStates[trip.trip_id]?.isClosingCell ? (language === "ru" ? "Закрываю..." : "Closing...") : (language === "ru" ? "Закрыть" : "Close")}
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="destructive"
+                                  onClick={() => handleTripCellError(trip.trip_id, trip.trip_id, trip.driver_user_id)}
+                                  disabled={!operatorId || tripCellStates[trip.trip_id]?.isRequestingError || tripCellStates[trip.trip_id]?.isOpeningCell || tripCellStates[trip.trip_id]?.isClosingCell}
+                                >
+                                  {tripCellStates[trip.trip_id]?.isRequestingError ? (language === "ru" ? "Отпр..." : "Sending...") : (language === "ru" ? "Ошибка" : "Error")}
+                                </Button>
+                              </div>
+                            </div>
+                          </div>
                         )}
                       </TableCell>
                     </TableRow>
@@ -411,17 +717,81 @@ export function OperatorForm({
                                         </TableCell>
                                         <TableCell className="space-x-2">
                                           {hasCourier ? (
-                                            <div className="flex items-center gap-2">
-                                              <span className="text-sm">
-                                                {language === "ru" ? "Курьер" : "Courier"} #{order.delivery_courier_id}
-                                              </span>
-                                              <Button
-                                                size="sm"
-                                                variant="outline"
-                                                onClick={() => handleRemoveCourier(order)}
-                                              >
-                                                {t.operator.remove}
-                                              </Button>
+                                            <div className="flex flex-col gap-2">
+                                              <div className="flex items-center gap-2">
+                                                <span className="text-sm">
+                                                  {language === "ru" ? "Курьер" : "Courier"} #{order.delivery_courier_id}
+                                                </span>
+                                                <Button
+                                                  size="sm"
+                                                  variant="outline"
+                                                  onClick={() => handleRemoveCourier(order)}
+                                                >
+                                                  {t.operator.remove}
+                                                </Button>
+                                              </div>
+                                              {/* Кнопки работы с ячейками */}
+                                              <div className="flex flex-col gap-1 p-2 border rounded bg-muted/30">
+                                                <div className="text-xs font-medium mb-1">{language === "ru" ? "Управление ячейкой" : "Cell Control"}</div>
+                                                <div className="flex flex-wrap gap-1">
+                                                  <Button
+                                                    size="sm"
+                                                    variant="outline"
+                                                    onClick={() => handleRequestCode(order.order_id, order.dest_cell_id, order.status, order.delivery_courier_id)}
+                                                    disabled={!operatorId || orderCellStates[order.order_id]?.isRequestingCode || orderCellStates[order.order_id]?.isGettingCode || orderCellStates[order.order_id]?.isOpeningCell || orderCellStates[order.order_id]?.isClosingCell || orderCellStates[order.order_id]?.isRequestingError}
+                                                  >
+                                                    {orderCellStates[order.order_id]?.isRequestingCode ? (language === "ru" ? "Запрос..." : "Request...") : (language === "ru" ? "Запросить код" : "Request Code")}
+                                                  </Button>
+                                                  <Button
+                                                    size="sm"
+                                                    variant="outline"
+                                                    onClick={() => handleGetCode(order.order_id, order.dest_cell_id, order.status, order.delivery_courier_id)}
+                                                    disabled={!operatorId || orderCellStates[order.order_id]?.isGettingCode || orderCellStates[order.order_id]?.isRequestingCode}
+                                                  >
+                                                    {orderCellStates[order.order_id]?.isGettingCode ? (language === "ru" ? "Получ..." : "Getting...") : (language === "ru" ? "Получить код" : "Get Code")}
+                                                  </Button>
+                                                </div>
+                                                {orderCellStates[order.order_id]?.accessCode && (
+                                                  <div className="flex items-center gap-1 mt-1">
+                                                    <Badge variant="default" className="text-xs">
+                                                      {language === "ru" ? "Код:" : "Code:"} {orderCellStates[order.order_id].accessCode}
+                                                    </Badge>
+                                                  </div>
+                                                )}
+                                                <div className="flex items-center gap-1 mt-1">
+                                                  <Input
+                                                    type="text"
+                                                    placeholder="PIN"
+                                                    value={pins[order.order_id] || ""}
+                                                    onChange={(e) => setPins({ ...pins, [order.order_id]: e.target.value })}
+                                                    className="w-20 h-7 text-xs"
+                                                  />
+                                                  <Button
+                                                    size="sm"
+                                                    variant="outline"
+                                                    onClick={() => handleOpenCell(order.order_id, order.dest_cell_id, order.status, order.delivery_courier_id)}
+                                                    disabled={!operatorId || orderCellStates[order.order_id]?.isOpeningCell || orderCellStates[order.order_id]?.isClosingCell || orderCellStates[order.order_id]?.isRequestingError || !pins[order.order_id]}
+                                                  >
+                                                    {orderCellStates[order.order_id]?.isOpeningCell ? (language === "ru" ? "Открываю..." : "Opening...") : (language === "ru" ? "Открыть" : "Open")}
+                                                  </Button>
+                                                  <Button
+                                                    size="sm"
+                                                    variant="outline"
+                                                    onClick={() => handleCloseCell(order.order_id, order.dest_cell_id, order.status, order.delivery_courier_id)}
+                                                    disabled={!operatorId || orderCellStates[order.order_id]?.isClosingCell || orderCellStates[order.order_id]?.isOpeningCell || orderCellStates[order.order_id]?.isRequestingError}
+                                                  >
+                                                    {orderCellStates[order.order_id]?.isClosingCell ? (language === "ru" ? "Закрываю..." : "Closing...") : (language === "ru" ? "Закрыть" : "Close")}
+                                                  </Button>
+                                                  <Button
+                                                    size="sm"
+                                                    variant="destructive"
+                                                    onClick={() => handleCellError(order.order_id, order.dest_cell_id, order.status, order.delivery_courier_id)}
+                                                    disabled={!operatorId || orderCellStates[order.order_id]?.isRequestingError || orderCellStates[order.order_id]?.isOpeningCell || orderCellStates[order.order_id]?.isClosingCell}
+                                                  >
+                                                    {orderCellStates[order.order_id]?.isRequestingError ? (language === "ru" ? "Отпр..." : "Sending...") : (language === "ru" ? "Ошибка" : "Error")}
+                                                  </Button>
+                                                </div>
+                                              </div>
                                             </div>
                                           ) : (
                                             <div className="flex items-center gap-2">

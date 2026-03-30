@@ -15,8 +15,9 @@ export async function performCellOperation(
   options: {
     entityType?: 'order' | 'locker';
     targetRole?: string;
-    leg?: 'pickup' | 'dropoff';
-  } = {}
+    leg?: 'pickup' | 'delivery';
+  } = {},
+  targetUserId?: number
 ) {
   const { entityType = 'order', targetRole, leg } = options;
   
@@ -33,13 +34,13 @@ export async function performCellOperation(
   // Добавляем leg в metadata если передан
   const finalMetadata = leg ? { ...metadata, leg } : metadata;
   
-  console.log('performCellOperation called with:', { orderId, userId, processName, metadata: finalMetadata, userRole, entityType: finalEntityType });
+  console.log('performCellOperation called with:', { orderId, userId, processName, metadata: finalMetadata, userRole, entityType: finalEntityType, targetUserId });
   const requestData = makeFsmEnqueueRequest({
     entity_type: finalEntityType,
     entity_id: orderId,
     process_name: processName,
     user_id: userId,
-    target_user_id: userId,
+    target_user_id: targetUserId ?? userId,
     target_role: targetRole,
     user_role: userRole,
     metadata: finalMetadata,
