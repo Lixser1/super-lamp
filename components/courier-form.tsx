@@ -6,9 +6,10 @@ import { Badge } from "@/components/ui/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
-import { fetchOrdersByCourier, enqueueFsmRequest, makeFsmEnqueueRequest, fetchFsmUserErrors, fetchAccessCodeView } from "@/lib/api"
+import { fetchOrdersByCourier, fetchFsmUserErrors, fetchAccessCodeView } from "@/lib/api"
 import { useEffect, useState } from "react"
 import { performCellOperation } from "@/lib/utils"
+import { getLegFromStatus } from "@/lib/cell-operations"
 
 interface CourierFormProps {
   selectedCourierId: string;
@@ -100,9 +101,19 @@ export function CourierForm({
 
     try {
       const order = assignedOrders.find(o => o.id === orderId);
-      const leg = order?.status === "order_created" ? "pickup" : "delivery";
+      const leg = getLegFromStatus(order?.status || "");
       
       const result = await performCellOperation(orderId, parseInt(selectedCourierId), "request_locker_access_code", { leg }, "courier");
+      
+      // Если в ответе есть pin, сохраняем его
+      if (result?.pin) {
+        setAssignedOrders(prev =>
+          prev.map(o =>
+            o.id === orderId ? { ...o, accessCode: result.pin } : o
+          )
+        );
+      }
+      
       addLog({
         role: "courier",
         action: "request_access_code",
@@ -129,12 +140,12 @@ export function CourierForm({
 
     try {
       const order = assignedOrders.find(o => o.id === orderId);
-      const leg = order?.status === "order_created" || order?.status === "order_courier1_assigned" ? "pickup" : "delivery";
+      const leg = getLegFromStatus(order?.status || "");
       
       const result = await fetchAccessCodeView(orderId, leg, parseInt(selectedCourierId));
       setAssignedOrders(prev =>
         prev.map(order =>
-          order.id === orderId ? { ...order, accessCode: result.code, isGettingCode: false } : order
+          order.id === orderId ? { ...order, accessCode: result.pin, isGettingCode: false } : order
         )
       );
     } catch (error) {

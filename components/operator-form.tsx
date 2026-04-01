@@ -11,6 +11,7 @@ import { useLanguage } from "@/lib/language-context"
 import { mockDriverExchangeOrders, mockDriverAssignedOrders } from "@/lib/mock-data"
 import { fetchOperatorTrips, fetchOperatorLockers, fetchUsers, enqueueFsmRequest, makeFsmEnqueueRequest, fetchAccessCodeView } from "@/lib/api"
 import { performCellOperation } from "@/lib/utils"
+import { getLegFromStatus } from "@/lib/cell-operations"
 
 interface OperatorFormProps {
   addLog: (log: any) => void
@@ -262,17 +263,6 @@ export function OperatorForm({
     return enqueueFsmRequest(request)
   }
 
-  // Определение leg на основе статуса заказа
-  const getLegFromStatus = (status: string): "pickup" | "delivery" => {
-    const deliveryStatuses = [
-      'order_in_transit_to_post2',
-      'order_courier2_assigned',
-      'order_parcel_confirmed_post2',
-      'order_courier2_parcel_delivered'
-    ]
-    return deliveryStatuses.includes(status) ? "delivery" : "pickup"
-  }
-
   // Функции для работы с ячейками заказов в постаматах
   const handleRequestCode = async (orderId: number, cellId: number, status: string, targetUserId: number) => {
     if (!operatorId) return
@@ -283,7 +273,15 @@ export function OperatorForm({
     }))
 
     try {
-      await performCellOperation(orderId, operatorId, "request_locker_access_code", { leg }, "operator", { targetRole: "courier", leg }, targetUserId)
+      const result = await performCellOperation(orderId, operatorId, "request_locker_access_code", { leg }, "operator", { targetRole: "courier", leg }, targetUserId)
+      
+      // Если в ответе есть pin, сохраняем его
+      if (result?.pin) {
+        setOrderCellStates(prev => ({
+          ...prev,
+          [orderId]: { ...prev[orderId], accessCode: result.pin }
+        }))
+      }
     } catch (error) {
       console.error('Error requesting code:', error)
     } finally {
@@ -386,7 +384,15 @@ export function OperatorForm({
     }))
 
     try {
-      await performCellOperation(tripId, operatorId, "request_locker_access_code", { leg: "pickup" }, "operator", { targetRole: "driver", leg: "pickup" }, targetUserId)
+      const result = await performCellOperation(tripId, operatorId, "request_locker_access_code", { leg: "pickup" }, "operator", { targetRole: "driver", leg: "pickup" }, targetUserId)
+      
+      // Если в ответе есть pin, сохраняем его
+      if (result?.pin) {
+        setTripCellStates(prev => ({
+          ...prev,
+          [tripId]: { ...prev[tripId], accessCode: result.pin }
+        }))
+      }
     } catch (error) {
       console.error('Error requesting code:', error)
     } finally {
