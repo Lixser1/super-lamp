@@ -172,7 +172,8 @@ export function CourierForm({
 
     try {
       console.log('Sending open_cell request');
-      const result = await performCellOperation(orderId, parseInt(selectedCourierId), "open_cell", { pin: order.pin }, "courier");
+      const leg = getLegFromStatus(order?.status || "");
+      const result = await performCellOperation(orderId, parseInt(selectedCourierId), "open_cell", { pin: order.pin, leg }, "courier");
       console.log('open_cell result:', result);
       addLog({
         role: "courier",

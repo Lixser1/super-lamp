@@ -324,7 +324,7 @@ export function OperatorForm({
     }))
 
     try {
-      await performCellOperation(cellId, operatorId, "open_cell", { pin: pins[orderId] }, "operator", { targetRole: "courier", leg }, targetUserId)
+      await performCellOperation(cellId, operatorId, "open_cell", { pin: pins[orderId], leg }, "operator", { targetRole: "courier", leg }, targetUserId)
     } catch (error) {
       console.error('Error opening cell:', error)
     } finally {
