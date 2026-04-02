@@ -573,68 +573,6 @@ export function OperatorForm({
                                 {language === "ru" ? "Снять" : "Remove"}
                               </Button>
                             </div>
-                            {/* Кнопки работы с ячейками */}
-                            <div className="flex flex-col gap-1 mt-2 p-2 border rounded bg-muted/30">
-                              <div className="text-xs font-medium mb-1">{language === "ru" ? "Управление ячейкой" : "Cell Control"}</div>
-                              <div className="flex flex-wrap gap-1">
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  onClick={() => handleTripRequestCode(trip.trip_id, trip.trip_id, trip.driver_user_id)}
-                                  disabled={!operatorId || tripCellStates[trip.trip_id]?.isRequestingCode || tripCellStates[trip.trip_id]?.isGettingCode || tripCellStates[trip.trip_id]?.isOpeningCell || tripCellStates[trip.trip_id]?.isClosingCell || tripCellStates[trip.trip_id]?.isRequestingError}
-                                >
-                                  {tripCellStates[trip.trip_id]?.isRequestingCode ? (language === "ru" ? "Запрос..." : "Request...") : (language === "ru" ? "Запросить код" : "Request Code")}
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  onClick={() => handleTripGetCode(trip.trip_id, trip.trip_id, trip.driver_user_id)}
-                                  disabled={!operatorId || tripCellStates[trip.trip_id]?.isGettingCode || tripCellStates[trip.trip_id]?.isRequestingCode}
-                                >
-                                  {tripCellStates[trip.trip_id]?.isGettingCode ? (language === "ru" ? "Получ..." : "Getting...") : (language === "ru" ? "Получить код" : "Get Code")}
-                                </Button>
-                              </div>
-                              {tripCellStates[trip.trip_id]?.accessCode && (
-                                <div className="flex items-center gap-1 mt-1">
-                                  <Badge variant="default" className="text-xs">
-                                    {language === "ru" ? "Код:" : "Code:"} {tripCellStates[trip.trip_id].accessCode}
-                                  </Badge>
-                                </div>
-                              )}
-                              <div className="flex items-center gap-1 mt-1">
-                                <Input
-                                  type="text"
-                                  placeholder="PIN"
-                                  value={tripPins[trip.trip_id] || ""}
-                                  onChange={(e) => setTripPins({ ...tripPins, [trip.trip_id]: e.target.value })}
-                                  className="w-20 h-7 text-xs"
-                                />
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  onClick={() => handleTripOpenCell(trip.trip_id, trip.trip_id, trip.driver_user_id)}
-                                  disabled={!operatorId || tripCellStates[trip.trip_id]?.isOpeningCell || tripCellStates[trip.trip_id]?.isClosingCell || tripCellStates[trip.trip_id]?.isRequestingError || !tripPins[trip.trip_id]}
-                                >
-                                  {tripCellStates[trip.trip_id]?.isOpeningCell ? (language === "ru" ? "Открываю..." : "Opening...") : (language === "ru" ? "Открыть" : "Open")}
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  onClick={() => handleTripCloseCell(trip.trip_id, trip.trip_id, trip.driver_user_id)}
-                                  disabled={!operatorId || tripCellStates[trip.trip_id]?.isClosingCell || tripCellStates[trip.trip_id]?.isOpeningCell || tripCellStates[trip.trip_id]?.isRequestingError}
-                                >
-                                  {tripCellStates[trip.trip_id]?.isClosingCell ? (language === "ru" ? "Закрываю..." : "Closing...") : (language === "ru" ? "Закрыть" : "Close")}
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="destructive"
-                                  onClick={() => handleTripCellError(trip.trip_id, trip.trip_id, trip.driver_user_id)}
-                                  disabled={!operatorId || tripCellStates[trip.trip_id]?.isRequestingError || tripCellStates[trip.trip_id]?.isOpeningCell || tripCellStates[trip.trip_id]?.isClosingCell}
-                                >
-                                  {tripCellStates[trip.trip_id]?.isRequestingError ? (language === "ru" ? "Отпр..." : "Sending...") : (language === "ru" ? "Ошибка" : "Error")}
-                                </Button>
-                              </div>
-                            </div>
                           </div>
                         )}
                       </TableCell>

@@ -56,6 +56,7 @@ export function CourierForm({
   const [isErrorModalOpen, setIsErrorModalOpen] = useState(false);
   const [selectedErrorType, setSelectedErrorType] = useState<string>("");
   const [currentOrderId, setCurrentOrderId] = useState<number | null>(null);
+  const [isConfirmingDelivery, setIsConfirmingDelivery] = useState<{ [orderId: number]: boolean }>({});
 
   // Типы ошибок для курьера (заказы)
   const courierErrorTypes = [
@@ -287,6 +288,44 @@ export function CourierForm({
     }
   };
 
+  // Функция для подтверждения доставки
+  const handleConfirmDelivery = async (orderId: number) => {
+    const order = assignedOrders.find(o => o.id === orderId);
+    if (!order) return;
+
+    setIsConfirmingDelivery(prev => ({
+      ...prev,
+      [orderId]: true
+    }));
+
+    try {
+      const requestData = makeFsmEnqueueRequest({
+        entity_type: "order",
+        entity_id: orderId,
+        process_name: "confirm_courier2_delivery",
+        user_id: parseInt(selectedCourierId),
+        target_user_id: parseInt(selectedCourierId),
+        target_role: "courier",
+        metadata: { pin: order.pin || "000000" },
+      });
+
+      const result = await enqueueFsmRequest(requestData);
+
+      addLog({
+        role: "courier",
+        action: "confirm_courier2_delivery",
+        data: result,
+      });
+    } catch (error) {
+      console.error('Error confirming delivery:', error);
+    } finally {
+      setIsConfirmingDelivery(prev => ({
+        ...prev,
+        [orderId]: false
+      }));
+    }
+  };
+
 
   // Функция для рендера кнопок действий
   const renderCourierActionButtons = (order: any) => (
@@ -301,14 +340,14 @@ export function CourierForm({
         <Button
           size="sm"
           onClick={() => handleRequestAccessCode(order.id)}
-          disabled={order.isRequestingCode || order.isGettingCode || order.isSubmittingError}
+          disabled={order.isRequestingCode || order.isGettingCode || order.isSubmittingError || isConfirmingDelivery[order.id]}
         >
           {order.isRequestingCode ? (language === "ru" ? "Запрос..." : "Requesting...") : (language === "ru" ? "Запросить код" : "Request code")}
         </Button>
         <Button
           size="sm"
           onClick={() => handleGetAccessCode(order.id)}
-          disabled={order.isGettingCode || order.isRequestingCode || order.isSubmittingError}
+          disabled={order.isGettingCode || order.isRequestingCode || order.isSubmittingError || isConfirmingDelivery[order.id]}
         >
           {order.isGettingCode ? (language === "ru" ? "Получаю..." : "Getting...") : (language === "ru" ? "Получить код" : "Get code")}
         </Button>
@@ -325,7 +364,7 @@ export function CourierForm({
           size="sm"
           variant="outline"
           onClick={() => handleOpenCell(order.id)}
-          disabled={order.isOpeningCell || order.isClosingCell || order.isSubmittingError}
+          disabled={order.isOpeningCell || order.isClosingCell || order.isSubmittingError || isConfirmingDelivery[order.id]}
         >
           {order.isOpeningCell ? (language === "ru" ? "Открываю..." : "Opening...") : (language === "ru" ? "Открыть ячейку" : "Open cell")}
         </Button>
@@ -333,15 +372,25 @@ export function CourierForm({
           size="sm"
           variant="outline"
           onClick={() => handleCloseCell(order.id)}
-          disabled={order.isClosingCell || order.isOpeningCell || order.isSubmittingError}
+          disabled={order.isClosingCell || order.isOpeningCell || order.isSubmittingError || isConfirmingDelivery[order.id]}
         >
           {order.isClosingCell ? (language === "ru" ? "Закрываю..." : "Closing...") : (language === "ru" ? "Закрыть ячейку" : "Close cell")}
         </Button>
+        {order.status === "order_courier2_parcel_delivered" && (
+          <Button
+            size="sm"
+            variant="default"
+            onClick={() => handleConfirmDelivery(order.id)}
+            disabled={isConfirmingDelivery[order.id]}
+          >
+            {isConfirmingDelivery[order.id] ? (language === "ru" ? "Подтверждаю..." : "Confirming...") : (language === "ru" ? "Подтвердить доставку" : "Confirm delivery")}
+          </Button>
+        )}
         <Button
           size="sm"
           variant="outline"
           onClick={() => handleRequestError(order.id)}
-          disabled={order.isSubmittingError}
+          disabled={order.isSubmittingError || isConfirmingDelivery[order.id]}
         >
           {order.isSubmittingError ? (language === "ru" ? "Отправляю..." : "Submitting...") : (language === "ru" ? "Сообщить об ошибке" : "Report error")}
         </Button>
