@@ -6,7 +6,8 @@ import { Badge } from "@/components/ui/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
-import { fetchOrdersByCourier, fetchFsmUserErrors, fetchAccessCodeView } from "@/lib/api"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
+import { fetchOrdersByCourier, fetchFsmUserErrors, fetchAccessCodeView, enqueueFsmRequest, makeFsmEnqueueRequest } from "@/lib/api"
 import { useEffect, useState } from "react"
 import { performCellOperation } from "@/lib/utils"
 import { getLegFromStatus } from "@/lib/cell-operations"
@@ -52,6 +53,17 @@ export function CourierForm({
   const [userErrors, setUserErrors] = useState<any[]>([]);
   const [isLoadingUsers, setIsLoadingUsers] = useState(false);
   const [isRefreshingClient, setIsRefreshingClient] = useState(false);
+  const [isErrorModalOpen, setIsErrorModalOpen] = useState(false);
+  const [selectedErrorType, setSelectedErrorType] = useState<string>("");
+  const [currentOrderId, setCurrentOrderId] = useState<number | null>(null);
+
+  // Типы ошибок для курьера (заказы)
+  const courierErrorTypes = [
+    { value: "parcel_missing", label: language === "ru" ? "Посылка не найдена" : "Parcel missing" },
+    { value: "parcel_damaged", label: language === "ru" ? "Посылка повреждена" : "Parcel damaged" },
+    { value: "wrong_parcel", label: language === "ru" ? "Не та посылка" : "Wrong parcel" },
+    { value: "other", label: language === "ru" ? "Другая ошибка" : "Other" },
+  ];
 
   // Загружаем заказы при изменении selectedCourierId
   useEffect(() => {
@@ -59,7 +71,17 @@ export function CourierForm({
       if (!selectedCourierId) return;
       try {
         const orders = await fetchOrdersByCourier(selectedCourierId);
-        setAssignedOrders(orders);
+        setAssignedOrders(orders.map(order => ({
+          ...order,
+          isRequestingError: false,
+          isRequestingCode: false,
+          isGettingCode: false,
+          isOpeningCell: false,
+          isClosingCell: false,
+          isSubmittingError: false,
+          pin: "",
+          accessCode: undefined,
+        })));
       } catch (error) {
         console.error("Ошибка при загрузке заказов:", error);
       }
@@ -217,6 +239,54 @@ export function CourierForm({
     }
   };
 
+  // Функция для запроса ошибки
+  const handleRequestError = (orderId: number) => {
+    setCurrentOrderId(orderId);
+    setSelectedErrorType("");
+    setIsErrorModalOpen(true);
+  };
+
+  // Функция для отправки ошибки
+  const handleSubmitError = async () => {
+    if (!currentOrderId || !selectedErrorType) return;
+
+    setAssignedOrders(prev =>
+      prev.map(order =>
+        order.id === currentOrderId ? { ...order, isSubmittingError: true } : order
+      )
+    );
+
+    try {
+      const requestData = makeFsmEnqueueRequest({
+        entity_type: "order",
+        entity_id: currentOrderId,
+        process_name: "report_error",
+        user_id: parseInt(selectedCourierId),
+        metadata: { error_type: selectedErrorType },
+      });
+
+      const result = await enqueueFsmRequest(requestData);
+
+      addLog({
+        role: "courier",
+        action: "report_error",
+        data: result,
+      });
+
+      setIsErrorModalOpen(false);
+      setCurrentOrderId(null);
+      setSelectedErrorType("");
+    } catch (error) {
+      console.error('Error reporting error:', error);
+    } finally {
+      setAssignedOrders(prev =>
+        prev.map(order =>
+          order.id === currentOrderId ? { ...order, isSubmittingError: false } : order
+        )
+      );
+    }
+  };
+
 
   // Функция для рендера кнопок действий
   const renderCourierActionButtons = (order: any) => (
@@ -231,14 +301,14 @@ export function CourierForm({
         <Button
           size="sm"
           onClick={() => handleRequestAccessCode(order.id)}
-          disabled={order.isRequestingCode || order.isGettingCode}
+          disabled={order.isRequestingCode || order.isGettingCode || order.isSubmittingError}
         >
           {order.isRequestingCode ? (language === "ru" ? "Запрос..." : "Requesting...") : (language === "ru" ? "Запросить код" : "Request code")}
         </Button>
         <Button
           size="sm"
           onClick={() => handleGetAccessCode(order.id)}
-          disabled={order.isGettingCode || order.isRequestingCode}
+          disabled={order.isGettingCode || order.isRequestingCode || order.isSubmittingError}
         >
           {order.isGettingCode ? (language === "ru" ? "Получаю..." : "Getting...") : (language === "ru" ? "Получить код" : "Get code")}
         </Button>
@@ -255,7 +325,7 @@ export function CourierForm({
           size="sm"
           variant="outline"
           onClick={() => handleOpenCell(order.id)}
-          disabled={order.isOpeningCell || order.isClosingCell || order.isRequestingError}
+          disabled={order.isOpeningCell || order.isClosingCell || order.isSubmittingError}
         >
           {order.isOpeningCell ? (language === "ru" ? "Открываю..." : "Opening...") : (language === "ru" ? "Открыть ячейку" : "Open cell")}
         </Button>
@@ -263,9 +333,17 @@ export function CourierForm({
           size="sm"
           variant="outline"
           onClick={() => handleCloseCell(order.id)}
-          disabled={order.isClosingCell || order.isOpeningCell || order.isRequestingError}
+          disabled={order.isClosingCell || order.isOpeningCell || order.isSubmittingError}
         >
           {order.isClosingCell ? (language === "ru" ? "Закрываю..." : "Closing...") : (language === "ru" ? "Закрыть ячейку" : "Close cell")}
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => handleRequestError(order.id)}
+          disabled={order.isSubmittingError}
+        >
+          {order.isSubmittingError ? (language === "ru" ? "Отправляю..." : "Submitting...") : (language === "ru" ? "Сообщить об ошибке" : "Report error")}
         </Button>
         <Button
           size="sm"
@@ -440,6 +518,40 @@ export function CourierForm({
           </div>
         </div>
       </CardContent>
+
+      {/* Модальное окно для сообщения об ошибке */}
+      <Dialog open={isErrorModalOpen} onOpenChange={setIsErrorModalOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{language === "ru" ? "Сообщить об ошибке" : "Report Error"}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label htmlFor="error-type">{language === "ru" ? "Тип ошибки" : "Error Type"}</Label>
+              <Select value={selectedErrorType} onValueChange={setSelectedErrorType}>
+                <SelectTrigger id="error-type">
+                  <SelectValue placeholder={language === "ru" ? "Выберите тип ошибки" : "Select error type"} />
+                </SelectTrigger>
+                <SelectContent>
+                  {courierErrorTypes.map((errorType) => (
+                    <SelectItem key={errorType.value} value={errorType.value}>
+                      {errorType.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsErrorModalOpen(false)}>
+              {language === "ru" ? "Отмена" : "Cancel"}
+            </Button>
+            <Button onClick={handleSubmitError} disabled={!selectedErrorType}>
+              {language === "ru" ? "Отправить" : "Submit"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }

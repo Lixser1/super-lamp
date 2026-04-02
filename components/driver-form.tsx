@@ -66,6 +66,8 @@ interface DriverFormProps {
   handleReserveDirection: (directionId: number, capacity: string) => void;
   handleStartLoading: (reservationId: number) => void;
   handleCompleteLoading: (directionId: number) => void;
+  currentDirectionId: number | null;
+  setCurrentDirectionId: (id: number | null) => void;
   handleCancelReserve: (reservationId: number) => void;
   handleCloseOrder: () => void;
 }
@@ -124,10 +126,11 @@ export function DriverForm({
   handleReserveDirection,
   handleStartLoading,
   handleCompleteLoading,
+  currentDirectionId,
+  setCurrentDirectionId,
   handleCancelReserve,
   handleCloseOrder,
 }: DriverFormProps) {
-  const [currentDirectionId, setCurrentDirectionId] = useState<number | null>(null);
   const [orderStates, setOrderStates] = useState<{ [orderId: number]: {
     accessCode?: string;
     isRequestingCode?: boolean;
@@ -283,16 +286,19 @@ export function DriverForm({
 
   const handleStartTripByDirection = async (directionId: number) => {
     if (!selectedDriverId) return;
+    console.log('handleStartTripByDirection called with directionId:', directionId);
     try {
       // Получаем данные о рейсе
       const tripResult = await fetchDriverTripData(directionId, parseInt(selectedDriverId));
       console.log('fetchDriverTripData result:', tripResult);
+      console.log('tripResult.orders:', tripResult?.orders);
       
       if (tripResult && tripResult.trip_id) {
         setTripData(tripResult);
         setTripId(tripResult.trip_id);
         setTripState("in_transit");
         setCurrentDirectionId(directionId);
+        console.log('tripData set with orders count:', tripResult.orders?.length);
       }
       
       // Обновляем резервы после успешного старта рейса
@@ -472,7 +478,10 @@ export function DriverForm({
 <Button
  size="sm"
  variant="outline"
- onClick={() => handleCompleteLoading(Number(directionId))}
+ onClick={() => {
+   handleCompleteLoading(Number(directionId));
+   setCurrentDirectionId(Number(directionId));
+ }}
  >
  {t.driver.completeLoading}
 </Button>
@@ -610,7 +619,7 @@ export function DriverForm({
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {tripData?.orders.map((order) => {
+                      {tripData?.orders && tripData.orders.length > 0 ? tripData.orders.map((order) => {
                         const isTaken = takenDirectOrders.includes(order.order_id);
                         const canCheck = tripState === "at_from_locker" && !isTaken;
                         return (
@@ -633,7 +642,13 @@ export function DriverForm({
                             <TableCell>{order.order_id}</TableCell>
                           </TableRow>
                         );
-                      })}
+                      }) : (
+                        <TableRow>
+                          <TableCell colSpan={2} className="text-center text-muted-foreground">
+                            {language === "ru" ? "Нет заказов" : "No orders"}
+                          </TableCell>
+                        </TableRow>
+                      )}
                     </TableBody>
                   </Table>
                 </div>

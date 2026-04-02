@@ -102,6 +102,7 @@ const [isLoadingUsers, setIsLoadingUsers] = useState(false);
   const [reserves, setReserves] = useState<{ [orderId: number]: string }>({})
   const [driverReservations, setDriverReservations] = useState<any[]>([])
   const [loadingOrders, setLoadingOrders] = useState<any[]>([])
+  const [currentDirectionId, setCurrentDirectionId] = useState<number | null>(null)
 
   const [currentStep, setCurrentStep] = useState(0)
   const [isPlaying, setIsPlaying] = useState(false)
@@ -689,6 +690,8 @@ useEffect(() => {
     try {
       const result = await enqueueFsmRequest(requestData);
       handleAction("driver", "complete_loading", result);
+      // Очищаем заказы для погрузки после завершения погрузки
+      setLoadingOrders([]);
     } catch (error) {
       console.error("Error completing loading:", error);
     }
@@ -829,7 +832,6 @@ const fetchUsers = async () => {
 
 
   const handlePlaceParcelInCell = async (orderId: number, cellNumber: string, pin: string) => {
-    console.log('handlePlaceParcelInCell called for orderId:', orderId, 'cellNumber:', cellNumber, 'pin:', pin);
     const requestData = makeFsmEnqueueRequest({
       entity_type: "locker",
       entity_id: orderId,
@@ -841,9 +843,7 @@ const fetchUsers = async () => {
     });
 
     try {
-      console.log('Sending place_parcel_in_cell request');
       const result = await enqueueFsmRequest(requestData);
-      console.log('place_parcel_in_cell result:', result);
 
       // Обновляем локальное состояние
       const order = [...directOrders, ...reverseOrders].find((o) => o.id === orderId);
@@ -904,10 +904,9 @@ const fetchUsers = async () => {
   }
 const filteredAvailableOrders = availableOrders.filter((o: any) => {
   if (ordersFilter === "in") {
-    return o.type === "pickup" || o.type === "delivery" && o.status === "order_created";
+    return o.type === "delivery";
   } else if (ordersFilter === "out") {
-    return o.type === "delivery" && o.status === "order_parcel_confirmed_post2";
-    
+    return o.type === "pickup";
   }
   return false;
 });
@@ -1276,6 +1275,8 @@ const filteredAvailableOrders = availableOrders.filter((o: any) => {
     handleReserveDirection={handleReserveDirection}
     handleStartLoading={handleStartLoading}
     handleCompleteLoading={handleCompleteLoading}
+    currentDirectionId={currentDirectionId}
+    setCurrentDirectionId={setCurrentDirectionId}
     handleCancelReserve={handleCancelReserve}
     handleCloseOrder={handleCloseOrder}
   />

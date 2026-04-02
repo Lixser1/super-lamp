@@ -7,6 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
 import { useLanguage } from "@/lib/language-context"
 import { fetchOrdersByClient, fetchUsers, fetchFsmUserErrors, enqueueFsmRequest, makeFsmEnqueueRequest, fetchAccessCodeView } from "@/lib/api"
 import { performCellOperation } from "@/lib/utils"
@@ -31,6 +32,7 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
     isOpeningCell?: boolean
     isClosingCell?: boolean
     isRequestingError?: boolean
+    isSubmittingError?: boolean
     pin?: string
   }>>([])
   const [orderMessage, setOrderMessage] = useState<string | null>(null)
@@ -38,6 +40,21 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
   const [isLoadingUsers, setIsLoadingUsers] = useState(false)
   const [isRefreshingClient, setIsRefreshingClient] = useState(false)
   const { t, language } = useLanguage()
+
+  // Состояния для модала ошибки
+  const [isErrorModalOpen, setIsErrorModalOpen] = useState(false)
+  const [selectedErrorType, setSelectedErrorType] = useState<string>("")
+  const [currentOrderId, setCurrentOrderId] = useState<number | null>(null)
+
+  // Типы ошибок для клиента (заказы)
+  const clientErrorTypes = [
+    { value: "parcel_missing", label: language === "ru" ? "Посылка не найдена" : "Parcel missing" },
+    { value: "parcel_damaged", label: language === "ru" ? "Посылка повреждена" : "Parcel damaged" },
+    { value: "wrong_parcel", label: language === "ru" ? "Не та посылка" : "Wrong parcel" },
+    { value: "cancelled_by_client", label: language === "ru" ? "Отменено клиентом" : "Cancelled by client" },
+    { value: "manual_override", label: language === "ru" ? "Ручное вмешательство" : "Manual override" },
+    { value: "other", label: language === "ru" ? "Другая ошибка" : "Other" },
+  ]
 
   const loadUsers = async () => {
     setIsLoadingUsers(true);
@@ -63,6 +80,7 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
         canCancel: order.status !== 'cancelled' && order.status !== 'completed',
         pickupType: order.pickup_type,
         pin: "",
+        isSubmittingError: false,
       }));
       setClientOrders(processedOrders);
     } catch (error) {
@@ -175,6 +193,7 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
           isOpeningCell: false,
           isClosingCell: false,
           isRequestingError: false,
+          isSubmittingError: false,
           pin: "",
         },
       ]);
@@ -331,26 +350,48 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
     }
   }
 
-  const handleRequestError = async (orderId: number) => {
+  const handleRequestError = (orderId: number) => {
+    setCurrentOrderId(orderId);
+    setSelectedErrorType("");
+    setIsErrorModalOpen(true);
+  }
+
+  // Функция для отправки ошибки
+  const handleSubmitError = async () => {
+    if (!currentOrderId || !selectedErrorType) return;
+
     setClientOrders(prev =>
       prev.map(order =>
-        order.id === orderId ? { ...order, isRequestingError: true } : order
+        order.id === currentOrderId ? { ...order, isSubmittingError: true } : order
       )
     );
 
     try {
-      const result = await performCellOperation(orderId, parseInt(selectedClientId), "request_locker_access_code", {}, "client");
+      const requestData = makeFsmEnqueueRequest({
+        entity_type: "order",
+        entity_id: currentOrderId,
+        process_name: "report_error",
+        user_id: parseInt(selectedClientId),
+        metadata: { error_type: selectedErrorType },
+      });
+
+      const result = await enqueueFsmRequest(requestData);
+
       addLog({
         role: "client",
-        action: "request_locker_access_code",
+        action: "report_error",
         data: result,
       });
+
+      setIsErrorModalOpen(false);
+      setCurrentOrderId(null);
+      setSelectedErrorType("");
     } catch (error) {
-      console.error('Error requesting error:', error);
+      console.error('Error reporting error:', error);
     } finally {
       setClientOrders(prev =>
         prev.map(order =>
-          order.id === orderId ? { ...order, isRequestingError: false } : order
+          order.id === currentOrderId ? { ...order, isSubmittingError: false } : order
         )
       );
     }
@@ -529,14 +570,14 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
                               <Button
                                 size="sm"
                                 onClick={() => handleRequestAccessCode(order.id)}
-                                disabled={!selectedClientId || order.isRequestingCode || order.isGettingCode || order.pickupType !== "self"}
+                                disabled={!selectedClientId || order.isRequestingCode || order.isGettingCode || order.isSubmittingError || order.pickupType !== "self"}
                               >
                                 {order.isRequestingCode ? (language === "ru" ? "Запрос..." : "Requesting...") : (language === "ru" ? "Запросить код" : "Request code")}
                               </Button>
                               <Button
                                 size="sm"
                                 onClick={() => handleGetAccessCode(order.id)}
-                                disabled={!selectedClientId || order.isGettingCode || order.isRequestingCode || order.pickupType !== "self"}
+                                disabled={!selectedClientId || order.isGettingCode || order.isRequestingCode || order.isSubmittingError || order.pickupType !== "self"}
                               >
                                 {order.isGettingCode ? (language === "ru" ? "Получаю..." : "Getting...") : (language === "ru" ? "Получить код" : "Get code")}
                               </Button>
@@ -553,7 +594,7 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
                                 size="sm"
                                 variant="outline"
                                 onClick={() => handleOpenCell(order.id)}
-                                disabled={!selectedClientId || order.isOpeningCell || order.isClosingCell || order.isRequestingError || order.pickupType !== "self" || !order.pin}
+                                disabled={!selectedClientId || order.isOpeningCell || order.isClosingCell || order.isSubmittingError || order.pickupType !== "self" || !order.pin}
                               >
                                 {order.isOpeningCell ? (language === "ru" ? "Открываю..." : "Opening...") : t.client.openCell}
                               </Button>
@@ -561,7 +602,7 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
                                 size="sm"
                                 variant="outline"
                                 onClick={() => handleCloseCell(order.id)}
-                                disabled={!selectedClientId || order.isClosingCell || order.isOpeningCell || order.isRequestingError || order.pickupType !== "self"}
+                                disabled={!selectedClientId || order.isClosingCell || order.isOpeningCell || order.isSubmittingError || order.pickupType !== "self"}
                               >
                                 {order.isClosingCell ? (language === "ru" ? "Закрываю..." : "Closing...") : t.client.closeCell}
                               </Button>
@@ -569,9 +610,9 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
                                 size="sm"
                                 variant="destructive"
                                 onClick={() => handleRequestError(order.id)}
-                                disabled={!selectedClientId || order.isRequestingError || order.isOpeningCell || order.isClosingCell || order.pickupType !== "self"}
+                                disabled={!selectedClientId || order.isSubmittingError || order.isOpeningCell || order.isClosingCell || order.pickupType !== "self"}
                               >
-                                {order.isRequestingError ? (language === "ru" ? "Отправка..." : "Sending...") : t.client.error}
+                                {order.isSubmittingError ? (language === "ru" ? "Отправка..." : "Sending...") : (language === "ru" ? "Сообщить об ошибке" : "Report error")}
                               </Button>
                               {order.canCancel ? (
                                 <Button
@@ -596,6 +637,40 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
           </div>
         )}
       </CardContent>
+
+      {/* Модальное окно для сообщения об ошибке */}
+      <Dialog open={isErrorModalOpen} onOpenChange={setIsErrorModalOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{language === "ru" ? "Сообщить об ошибке" : "Report Error"}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label htmlFor="error-type">{language === "ru" ? "Тип ошибки" : "Error Type"}</Label>
+              <Select value={selectedErrorType} onValueChange={setSelectedErrorType}>
+                <SelectTrigger id="error-type">
+                  <SelectValue placeholder={language === "ru" ? "Выберите тип ошибки" : "Select error type"} />
+                </SelectTrigger>
+                <SelectContent>
+                  {clientErrorTypes.map((errorType) => (
+                    <SelectItem key={errorType.value} value={errorType.value}>
+                      {errorType.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsErrorModalOpen(false)}>
+              {language === "ru" ? "Отмена" : "Cancel"}
+            </Button>
+            <Button onClick={handleSubmitError} disabled={!selectedErrorType}>
+              {language === "ru" ? "Отправить" : "Submit"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
   )
 }
