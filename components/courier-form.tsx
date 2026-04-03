@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
 import { fetchOrdersByCourier, fetchFsmUserErrors, fetchAccessCodeView, enqueueFsmRequest, makeFsmEnqueueRequest } from "@/lib/api"
+import { loadOrdersFsmErrors } from "@/lib/utils"
 import { useEffect, useState } from "react"
 import { performCellOperation } from "@/lib/utils"
 import { getLegFromStatus } from "@/lib/cell-operations"
@@ -66,6 +67,24 @@ export function CourierForm({
     { value: "other", label: language === "ru" ? "Другая ошибка" : "Other" },
   ];
 
+  // Process names для курьера
+  const courierProcessNames = [
+    "order_assign_courier1",
+    "cancel_order",
+    "confirm_courier2_delivery",
+    "request_locker_access_code",
+    "open_cell",
+    "close_cell",
+    "report_error",
+  ];
+
+  // Загрузка ошибок FSM для заказов курьера
+  const loadOrderFsmErrors = async () => {
+    if (!selectedCourierId || assignedOrders.length === 0) return;
+    const updatedOrders = await loadOrdersFsmErrors(parseInt(selectedCourierId), assignedOrders, courierProcessNames);
+    setAssignedOrders(updatedOrders);
+  };
+
   // Загружаем заказы при изменении selectedCourierId
   useEffect(() => {
     const loadCourierOrders = async () => {
@@ -82,7 +101,10 @@ export function CourierForm({
           isSubmittingError: false,
           pin: "",
           accessCode: undefined,
+          fsmError: null,
         })));
+        // Загружаем ошибки FSM после загрузки заказов
+        setTimeout(() => loadOrderFsmErrors(), 100);
       } catch (error) {
         console.error("Ошибка при загрузке заказов:", error);
       }
@@ -142,6 +164,7 @@ export function CourierForm({
         action: "request_access_code",
         data: result,
       });
+      loadOrderFsmErrors();
     } catch (error) {
       console.error('Error requesting access code:', error);
     } finally {
@@ -203,6 +226,7 @@ export function CourierForm({
         action: "open_cell",
         data: result,
       });
+      loadOrderFsmErrors();
     } catch (error) {
       console.error('Error opening cell:', error);
     } finally {
@@ -229,6 +253,7 @@ export function CourierForm({
         action: "close_cell",
         data: result,
       });
+      loadOrderFsmErrors();
     } catch (error) {
       console.error('Error closing cell:', error);
     } finally {
@@ -316,6 +341,7 @@ export function CourierForm({
         action: "confirm_courier2_delivery",
         data: result,
       });
+      loadOrderFsmErrors();
     } catch (error) {
       console.error('Error confirming delivery:', error);
     } finally {
@@ -545,17 +571,24 @@ export function CourierForm({
                   <TableRow key={order.id}>
                     <TableCell>{order.id}</TableCell>
                     <TableCell>
-                      <Badge
-                        variant={
-                          ["locker_did_not_open", "locker_did_not_close"].includes(order.status)
-                            ? "destructive"
-                            : order.status === "locker_closed"
-                              ? "secondary"
-                              : "default"
-                        }
-                      >
-                        {getCourierStatusLabel(order.status)}
-                      </Badge>
+                      <div className="flex flex-col gap-1">
+                        <Badge
+                          variant={
+                            ["locker_did_not_open", "locker_did_not_close"].includes(order.status)
+                              ? "destructive"
+                              : order.status === "locker_closed"
+                                ? "secondary"
+                                : "default"
+                          }
+                        >
+                          {getCourierStatusLabel(order.status)}
+                        </Badge>
+                        {order.fsmError && (
+                          <Badge variant="destructive" className="text-xs whitespace-normal">
+                            {order.fsmError}
+                          </Badge>
+                        )}
+                      </div>
                     </TableCell>
                     <TableCell>
                       {renderCourierActionButtons(order)}

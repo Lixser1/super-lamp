@@ -10,6 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
 import { useLanguage } from "@/lib/language-context"
 import { fetchOrdersByClient, fetchUsers, fetchFsmUserErrors, enqueueFsmRequest, makeFsmEnqueueRequest, fetchAccessCodeView } from "@/lib/api"
+import { loadOrdersFsmErrors } from "@/lib/utils"
 import { performCellOperation } from "@/lib/utils"
 
 export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
@@ -34,6 +35,7 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
     isRequestingError?: boolean
     isSubmittingError?: boolean
     pin?: string
+    fsmError?: string | null
   }>>([])
   const [orderMessage, setOrderMessage] = useState<string | null>(null)
   const [users, setUsers] = useState<Array<{ id: number; name: string; role_name: string; city: string | null }>>([])
@@ -90,19 +92,31 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
     }
   };
 
-  const loadClientFsmError = async () => {
-    if (!selectedClientId) return null;
+  // Удалено - теперь используется loadOrderFsmErrors
+  // const loadClientFsmError = async () => { ... }
 
-    try {
-      const result: any = await fetchFsmUserErrors(parseInt(selectedClientId), 1);
-      if (result?.success && Array.isArray(result.errors)) {
-        const err = result.errors.find((e: any) => e.process_name === "create_order_request");
-        return err?.last_error ?? null;
-      }
-    } catch (error) {
-      console.error('Error loading client FSM errors:', error);
-    }
-    return null;
+  // Process names которые относятся к клиенту
+  const clientProcessNames = [
+    "create_order_request",
+    "cancel_order",
+    "report_error",
+    "request_locker_access_code",
+    "open_cell",
+    "close_cell",
+  ]
+
+  // Загрузка ошибок FSM для заказов клиента
+  const loadOrderFsmErrors = async () => {
+    if (!selectedClientId || clientOrders.length === 0) return;
+    const updatedOrders = await loadOrdersFsmErrors(parseInt(selectedClientId), clientOrders, clientProcessNames);
+    setClientOrders(updatedOrders);
+  };
+
+  // Очистка ошибки FSM для конкретного заказа (после успешного действия)
+  const clearOrderFsmError = (orderId: number) => {
+    setClientOrders(prev => prev.map(order =>
+      order.id === orderId ? { ...order, fsmError: null } : order
+    ));
   };
   useEffect(() => {
     loadUsers();
@@ -111,9 +125,9 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
   useEffect(() => {
     if (selectedClientId) {
       setOrderMessage(null);
-      loadClientOrders();
-      loadClientFsmError().then((err) => {
-        setOrderMessage(err);
+      loadClientOrders().then(() => {
+        // Загружаем ошибки FSM после загрузки заказов
+        loadOrderFsmErrors();
       });
     } else {
       setOrderMessage(null);
@@ -125,7 +139,9 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
     if (!selectedClientId) return;
 
     const interval = setInterval(() => {
-      loadClientOrders();
+      loadClientOrders().then(() => {
+        loadOrderFsmErrors();
+      });
     }, 20000); // 20 seconds
 
     return () => clearInterval(interval);
@@ -259,6 +275,8 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
         action: "request_access_code",
         data: result,
       });
+      // Обновляем ошибки FSM после действия
+      loadOrderFsmErrors();
     } catch (error) {
       console.error('Error requesting access code:', error);
     } finally {
@@ -314,6 +332,8 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
         action: "open_cell",
         data: result,
       });
+      // Обновляем ошибки FSM после действия
+      loadOrderFsmErrors();
     } catch (error) {
       console.error('Error opening cell:', error);
     } finally {
@@ -339,6 +359,8 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
         action: "close_cell",
         data: result,
       });
+      // Обновляем ошибки FSM после действия
+      loadOrderFsmErrors();
     } catch (error) {
       console.error('Error closing cell:', error);
     } finally {
@@ -552,9 +574,16 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
                         {order.isLoading ? (
                           <div className="h-5 w-24 bg-muted animate-pulse rounded-full" />
                         ) : (
-                          <Badge variant={order.status === "cancelled" ? "destructive" : order.status === "processing" ? "secondary" : "default"}>
-                            {order.status === "processing" ? t.client.statusProcessing : order.status}
-                          </Badge>
+                          <div className="flex flex-col gap-1">
+                            <Badge variant={order.status === "cancelled" ? "destructive" : order.status === "processing" ? "secondary" : "default"}>
+                              {order.status === "processing" ? t.client.statusProcessing : order.status}
+                            </Badge>
+                            {order.fsmError && (
+                              <Badge variant="destructive" className="text-xs whitespace-normal">
+                                {order.fsmError}
+                              </Badge>
+                            )}
+                          </div>
                         )}
                       </TableCell>
                       <TableCell>

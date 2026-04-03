@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { useLanguage } from "@/lib/language-context"
 import { mockDriverExchangeOrders, mockDriverAssignedOrders } from "@/lib/mock-data"
-import { fetchOperatorTrips, fetchOperatorLockers, fetchUsers, enqueueFsmRequest, makeFsmEnqueueRequest, fetchAccessCodeView } from "@/lib/api"
+import { fetchOperatorTrips, fetchOperatorLockers, fetchUsers, enqueueFsmRequest, makeFsmEnqueueRequest, fetchAccessCodeView, fetchFsmUserErrorsFiltered } from "@/lib/api"
 import { performCellOperation } from "@/lib/utils"
 import { getLegFromStatus } from "@/lib/cell-operations"
 

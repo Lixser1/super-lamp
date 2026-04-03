@@ -1,9 +1,58 @@
 import { clsx, type ClassValue } from 'clsx'
 import { twMerge } from 'tailwind-merge'
-import { makeFsmEnqueueRequest, enqueueFsmRequest } from './api'
+import { makeFsmEnqueueRequest, enqueueFsmRequest, fetchFsmUserErrorsFiltered } from './api'
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
+}
+
+// Тип для заказа с ошибкой FSM
+export type OrderWithFsmError = {
+  id: number;
+  fsmError?: string | null;
+  [key: string]: any;
+};
+
+// Универсальная функция загрузки ошибок FSM для заказов
+export async function loadOrdersFsmErrors<T extends OrderWithFsmError>(
+  userId: number,
+  orders: T[],
+  processNames: string[]
+): Promise<T[]> {
+  if (!userId || orders.length === 0) return orders;
+
+  try {
+    const result = await fetchFsmUserErrorsFiltered(userId, 1);
+    
+    if (result?.success && Array.isArray(result.errors)) {
+      const orderIds = orders.map(o => o.id);
+      const errorsMap: Record<number, string> = {};
+      
+      result.errors.forEach((err: any) => {
+        if (err.fsm_state === "FAILED" && err.last_error && err.entity_id) {
+          // Фильтруем по process_name
+          if (!processNames.includes(err.process_name)) return;
+          
+          const orderId = Number(err.entity_id);
+          // Фильтруем по entity_id (только заказы пользователя)
+          if (orderIds.includes(orderId)) {
+            if (!errorsMap[orderId]) {
+              errorsMap[orderId] = err.last_error;
+            }
+          }
+        }
+      });
+
+      return orders.map(order => ({
+        ...order,
+        fsmError: errorsMap[order.id] || null,
+      }));
+    }
+  } catch (error) {
+    console.error('Error loading order FSM errors:', error);
+  }
+  
+  return orders;
 }
 
 export async function performCellOperation(

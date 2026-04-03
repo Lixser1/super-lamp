@@ -58,6 +58,21 @@ export async function fetchOrdersByClient(client_id: string | number) {
   return response.json();
 }
 
+export async function fetchOrdersByRecipient(recipient_id: string | number) {
+  const response = await fetch(`/api/proxy/orders/recipient/${recipient_id}`, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Request failed: ${response.status} ${response.statusText}`);
+  }
+
+  return response.json();
+}
+
 export async function fetchUsers() {
   const response = await fetch('/api/proxy/users', {
     method: 'GET',
@@ -315,6 +330,81 @@ export async function fetchOperatorLockers() {
 
   if (!response.ok) {
     throw new Error(`Request fetchOperatorLockers failed: ${response.status} ${response.statusText}`);
+  }
+
+  return response.json();
+}
+
+// Получение FSM instances для пользователя с фильтрацией по process_name
+export type FsmInstance = {
+  id: number
+  entity_type: string
+  entity_id: number
+  process_name: string
+  fsm_state: string
+  last_error: string | null
+  created_at: string
+  updated_at: string
+}
+
+export async function fetchFsmInstances(
+  userId: number,
+  limit: number = 50,
+  processNames?: string[],
+  entityTypes?: string[]
+) {
+  const params = new URLSearchParams({
+    user_id: String(userId),
+    limit: String(limit),
+  });
+
+  if (processNames && processNames.length > 0) {
+    params.set('process_names', processNames.join(','));
+  }
+
+  if (entityTypes && entityTypes.length > 0) {
+    params.set('entity_types', entityTypes.join(','));
+  }
+
+  const url = `/api/proxy/fsm/instances?${params.toString()}`;
+  console.log('Fetching FSM instances:', url);
+
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Request fetchFsmInstances failed: ${response.status} ${response.statusText}`);
+  }
+
+  return response.json();
+}
+
+// Получение ошибок FSM для пользователя (использует /api/proxy/fsm/user-errors)
+export async function fetchFsmUserErrorsFiltered(
+  userId: number,
+  limit: number = 50
+) {
+  const params = new URLSearchParams({
+    user_id: String(userId),
+    limit: String(limit),
+  });
+
+  const url = `/api/proxy/fsm/user-errors?${params.toString()}`;
+  console.log('Fetching FSM user errors:', url);
+
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Request fetchFsmUserErrorsFiltered failed: ${response.status} ${response.statusText}`);
   }
 
   return response.json();

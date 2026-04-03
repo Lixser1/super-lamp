@@ -6,8 +6,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { enqueueFsmRequest, fetchAccessCodeView, fetchOrderTrack, makeFsmEnqueueRequest } from "@/lib/api";
-import { useState } from "react";
+import { enqueueFsmRequest, fetchAccessCodeView, fetchOrderTrack, fetchOrdersByRecipient, makeFsmEnqueueRequest } from "@/lib/api";
+import { performCellOperation } from "@/lib/utils";
+import { useEffect, useState } from "react";
+import { getLegFromStatus } from "@/lib/cell-operations";
 
 interface RecipientFormProps {
   selectedRecipientId: string;
@@ -49,11 +51,44 @@ export function RecipientForm({
   const [recipientLeg, setRecipientLeg] = useState<"pickup" | "delivery">("pickup")
   const [pinDisplay, setPinDisplay] = useState<string | null>(null)
 
+  const [recipientOrders, setRecipientOrders] = useState<any[]>([])
+  const [isLoadingRecipientOrders, setIsLoadingRecipientOrders] = useState(false)
+
+  const loadRecipientOrders = async (recipientId: string) => {
+    if (!recipientId) {
+      setRecipientOrders([])
+      return
+    }
+
+    setIsLoadingRecipientOrders(true)
+    try {
+      const orders = await fetchOrdersByRecipient(recipientId)
+      const normalized = orders.map((order: any) => ({
+        ...order,
+        isOpeningCell: false,
+        isClosingCell: false,
+        isRequestingError: false,
+        isRequestingCode: false,
+        isGettingCode: false,
+        isSubmittingError: false,
+        pin: "",
+        accessCode: undefined,
+      }))
+      setRecipientOrders(normalized)
+    } catch (error) {
+      console.error("Error loading recipient orders:", error)
+      setRecipientOrders([])
+    } finally {
+      setIsLoadingRecipientOrders(false)
+    }
+  }
+
   const handleRecipientLookup = async () => {
-    if (!recipientOrderId) return;
+    const orderIdToLookup = recipientOrderId
+    if (!orderIdToLookup) return;
 
     try {
-      const data = await fetchOrderTrack(parseInt(recipientOrderId));
+      const data = await fetchOrderTrack(parseInt(orderIdToLookup));
 
       // Обработка path: фильтруем статусы с is_completed или is_current
       const tracking = data.path
@@ -69,8 +104,7 @@ export function RecipientForm({
       const isCompleted = !!data.path?.find(
         (item: any) => item.status === 'order_parcel_confirmed_post2' && item.is_completed,
       )
-      const leg: "pickup" | "delivery" =
-        data.current_status === 'order_parcel_confirmed_post2' && isCompleted ? 'delivery' : 'pickup'
+      const leg: "pickup" | "delivery" = getLegFromStatus(data.current_status)
 
       setRecipientOrderDetails({
         id: data.order_id,
@@ -103,6 +137,15 @@ export function RecipientForm({
   };
 
     
+  // Загрузка заказов выбранного получателя
+  useEffect(() => {
+    if (selectedRecipientId) {
+      loadRecipientOrders(selectedRecipientId)
+    } else {
+      setRecipientOrders([])
+    }
+  }, [selectedRecipientId])
+
   // Функция для отправки запроса на создание пина (request_locker_access_code)
   const handleCreatePin = async () => {
     if (!recipientOrderDetails) return;
@@ -229,7 +272,16 @@ export function RecipientForm({
     }
   };
 
-  // Ошибка (request_locker_access_code)
+  const updateRecipientOrderById = (orderId: number, patch: Partial<any>) => {
+    setRecipientOrders(prev =>
+      prev.map(order =>
+        order.id === orderId
+          ? { ...order, ...patch }
+          : order
+      )
+    )
+  }
+
   const handleRequestError = async () => {
     if (!recipientOrderDetails) return;
 
@@ -260,6 +312,93 @@ export function RecipientForm({
     }
   };
 
+  const handleRequestErrorOrder = async (order: any) => {
+    updateRecipientOrderById(order.id, { isRequestingError: true });
+
+    const requestData = makeFsmEnqueueRequest({
+      entity_type: "order",
+      entity_id: order.id,
+      process_name: "request_locker_access_code",
+      user_id: parseInt(selectedRecipientId),
+      target_user_id: parseInt(selectedRecipientId),
+      user_role: "recipient",
+      metadata: {},
+    });
+
+    try {
+      const result = await enqueueFsmRequest(requestData);
+      addLog({
+        role: "recipient",
+        action: "request_locker_access_code",
+        order_id: order.id,
+        data: result,
+      });
+    } catch (error) {
+      console.error('Error requesting error for order:', error);
+    } finally {
+      updateRecipientOrderById(order.id, { isRequestingError: false });
+    }
+  };
+
+  const handleRequestAccessCodeForOrder = async (order: any) => {
+    updateRecipientOrderById(order.id, { isRequestingCode: true });
+
+    try {
+      const leg = getLegFromStatus(order.status);
+      const result = await performCellOperation(order.id, parseInt(selectedRecipientId), "request_locker_access_code", { leg }, "recipient");
+      updateRecipientOrderById(order.id, { accessCode: result?.pin || order.accessCode });
+      addLog({
+        role: "recipient",
+        action: "request_access_code",
+        order_id: order.id,
+        data: result,
+      });
+    } catch (error) {
+      console.error('Error requesting access code for order:', error);
+    } finally {
+      updateRecipientOrderById(order.id, { isRequestingCode: false });
+    }
+  };
+
+  const handleGetOrderAccessCode = async (order: any) => {
+    updateRecipientOrderById(order.id, { isGettingCode: true });
+
+    try {
+      const leg = getLegFromStatus(order.status);
+      const result = await fetchAccessCodeView(order.id, leg, parseInt(selectedRecipientId));
+      updateRecipientOrderById(order.id, { accessCode: result.pin, isGettingCode: false });
+    } catch (error) {
+      console.error('Error getting access code for order:', error);
+      updateRecipientOrderById(order.id, { isGettingCode: false });
+    }
+  };
+
+  const handleOpenOrderCell = async (order: any) => {
+    updateRecipientOrderById(order.id, { isOpeningCell: true });
+
+    try {
+      const leg = getLegFromStatus(order.status);
+      const result = await performCellOperation(order.id, parseInt(selectedRecipientId), "open_cell", { pin: order.pin, leg }, "recipient");
+      addLog({ role: "recipient", action: "open_cell", order_id: order.id, data: result });
+    } catch (error) {
+      console.error('Error opening cell for order:', error);
+    } finally {
+      updateRecipientOrderById(order.id, { isOpeningCell: false });
+    }
+  };
+
+  const handleCloseOrderCell = async (order: any) => {
+    updateRecipientOrderById(order.id, { isClosingCell: true });
+
+    try {
+      const result = await performCellOperation(order.id, parseInt(selectedRecipientId), "close_cell", {}, "recipient");
+      addLog({ role: "recipient", action: "close_cell", order_id: order.id, data: result });
+    } catch (error) {
+      console.error('Error closing cell for order:', error);
+    } finally {
+      updateRecipientOrderById(order.id, { isClosingCell: false });
+    }
+  };
   return (
     <Card>
       <CardHeader>
@@ -329,10 +468,9 @@ export function RecipientForm({
             <div className="flex gap-2">
               <Input
                 id="recipient-order-id"
-                type="number"
-                placeholder={t.recipient.enterOrderId}
                 value={recipientOrderId}
                 onChange={(e) => setRecipientOrderId(e.target.value)}
+                placeholder={t.recipient.orderId}
               />
               <Button onClick={handleRecipientLookup} disabled={!recipientOrderId}>
                 {t.recipient.trackingHistory}
@@ -406,6 +544,34 @@ export function RecipientForm({
                 {t.recipient.noTracking}
               </div>
             )
+          )}
+
+          {recipientOrders.length > 0 && (
+            <div className="mb-4">
+              <h3 className="font-semibold mb-3">{language === "ru" ? "Заказы получателя" : "Recipient Orders"}</h3>
+              <div className="border rounded-lg overflow-hidden">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>{t.recipient.orderId}</TableHead>
+                      <TableHead>{t.recipient.status}</TableHead>
+                      <TableHead>{t.recipient.description}</TableHead>
+                      <TableHead>{t.recipient.deliveryType || "Delivery"}</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {recipientOrders.map((order) => (
+                      <TableRow key={order.id}>
+                        <TableCell>{order.id}</TableCell>
+                        <TableCell>{order.status}</TableCell>
+                        <TableCell>{order.description}</TableCell>
+                        <TableCell>{order.delivery_type}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </div>
           )}
         </div>
 
