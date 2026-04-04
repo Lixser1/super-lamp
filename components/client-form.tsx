@@ -125,10 +125,7 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
   useEffect(() => {
     if (selectedClientId) {
       setOrderMessage(null);
-      loadClientOrders().then(() => {
-        // Загружаем ошибки FSM после загрузки заказов
-        loadOrderFsmErrors();
-      });
+      loadClientOrders();
     } else {
       setOrderMessage(null);
       setClientOrders([]);
@@ -139,9 +136,7 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
     if (!selectedClientId) return;
 
     const interval = setInterval(() => {
-      loadClientOrders().then(() => {
-        loadOrderFsmErrors();
-      });
+      loadClientOrders();
     }, 20000); // 20 seconds
 
     return () => clearInterval(interval);
@@ -408,6 +403,7 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
       setIsErrorModalOpen(false);
       setCurrentOrderId(null);
       setSelectedErrorType("");
+      loadOrderFsmErrors();
     } catch (error) {
       console.error('Error reporting error:', error);
     } finally {

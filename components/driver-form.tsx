@@ -8,8 +8,8 @@ import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { fetchAccessCodeView, startDriverTrip, fetchDriverReservations, fetchDriverTripData, fetchOperatorTrips, enqueueFsmRequest, makeFsmEnqueueRequest } from "@/lib/api";
-import { performCellOperation } from "@/lib/utils";
+import { fetchAccessCodeView, startDriverTrip, fetchDriverReservations, fetchDriverTripData, fetchOperatorTrips, enqueueFsmRequest, makeFsmEnqueueRequest, fetchFsmUserErrorsFiltered } from "@/lib/api";
+import { performCellOperation, loadOrdersFsmErrors } from "@/lib/utils";
 
 
 interface DriverFormProps {
@@ -144,6 +144,41 @@ export function DriverForm({
   const [operatorTrips, setOperatorTrips] = useState<any[]>([]);
   const [loadingOperatorTrips, setLoadingOperatorTrips] = useState(false);
 
+  // State для ошибок FSM заказов
+  const [orderFsmErrors, setOrderFsmErrors] = useState<Record<number, string>>({});
+
+  // Process names для водителя
+  const driverProcessNames = [
+    "trip_assign_driver",
+    "start_trip",
+    "arrive_at_destination",
+    "place_parcel_in_cell",
+    "request_locker_access_code",
+    "open_cell",
+    "close_cell",
+    "cancel_order",
+    "driver_reservation_cancel",
+  ];
+
+  // Загрузка ошибок FSM для заказов водителя (лимит 1)
+  const loadOrderFsmErrors = async () => {
+    if (!selectedDriverId) return;
+    
+    const result = await fetchFsmUserErrorsFiltered(parseInt(selectedDriverId), 1);
+    if (result?.success && Array.isArray(result.errors)) {
+      const orderIds = loadingOrders.map(o => o.order_id);
+      result.errors.forEach((err: any) => {
+        if (err.fsm_state === "FAILED" && err.last_error && err.entity_id) {
+          if (!driverProcessNames.includes(err.process_name)) return;
+          const orderId = Number(err.entity_id);
+          if (orderIds.includes(orderId)) {
+            setOrderFsmErrors(prev => ({ ...prev, [orderId]: err.last_error }));
+          }
+        }
+      });
+    }
+  };
+
   // Загрузка рейсов оператора при монтировании компонента
   useEffect(() => {
     const loadOperatorTrips = async () => {
@@ -161,6 +196,8 @@ export function DriverForm({
     loadOperatorTrips();
   }, []);
 
+
+
   const handleRequestAccessCode = async (orderId: number) => {
     setOrderStates(prev => ({
       ...prev,
@@ -169,7 +206,7 @@ export function DriverForm({
 
     try {
       const result = await performCellOperation(orderId, parseInt(selectedDriverId), "request_locker_access_code", { leg: "pickup" }, "driver", { targetRole: "driver", leg: "pickup" });
-      // addLog можно добавить, но поскольку это пропс, возможно не нужно
+      loadOrderFsmErrors();
     } catch (error) {
       console.error('Error requesting access code:', error);
     } finally {
@@ -210,6 +247,7 @@ export function DriverForm({
 
  try {
  const result = await performCellOperation(cellId, parseInt(selectedDriverId), "open_cell", { pin: pins[orderId] }, "driver", { targetRole: "driver", leg: "pickup" });
+ loadOrderFsmErrors();
  } catch (error) {
  console.error('Error opening cell:', error);
  } finally {
@@ -228,6 +266,7 @@ export function DriverForm({
 
  try {
  const result = await performCellOperation(cellId, parseInt(selectedDriverId), "close_cell", { leg: "pickup" }, "driver", { targetRole: "driver", leg: "pickup" });
+ loadOrderFsmErrors();
  } catch (error) {
  console.error('Error closing cell:', error);
  } finally {
@@ -532,7 +571,16 @@ export function DriverForm({
                 <TableBody>
                   {loadingOrders.map((order: any) => (
                     <TableRow key={order.order_id}>
-                      <TableCell className="font-medium">{order.order_id}</TableCell>
+                      <TableCell className="font-medium">
+                        <div className="flex flex-col gap-1">
+                          <span>{order.order_id}</span>
+                          {orderFsmErrors[order.order_id] && (
+                            <Badge variant="destructive" className="text-xs whitespace-normal">
+                              {orderFsmErrors[order.order_id]}
+                            </Badge>
+                          )}
+                        </div>
+                      </TableCell>
                       <TableCell>
                         <div className="flex flex-col gap-2">
                           {orderStates[order.order_id]?.accessCode && (

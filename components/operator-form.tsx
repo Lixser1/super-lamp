@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input"
 import { useLanguage } from "@/lib/language-context"
 import { mockDriverExchangeOrders, mockDriverAssignedOrders } from "@/lib/mock-data"
 import { fetchOperatorTrips, fetchOperatorLockers, fetchUsers, enqueueFsmRequest, makeFsmEnqueueRequest, fetchAccessCodeView, fetchFsmUserErrorsFiltered } from "@/lib/api"
-import { performCellOperation } from "@/lib/utils"
+import { performCellOperation, loadOrdersFsmErrors } from "@/lib/utils"
 import { getLegFromStatus } from "@/lib/cell-operations"
 
 interface OperatorFormProps {
@@ -60,6 +60,67 @@ export function OperatorForm({
   }>({})
   const [pins, setPins] = useState<{ [key: number]: string }>({})
   const [tripPins, setTripPins] = useState<{ [tripId: number]: string }>({})
+
+  // State для ошибок FSM заказов
+  const [orderFsmErrors, setOrderFsmErrors] = useState<Record<number, string>>({});
+
+  // Process names для оператора
+  const operatorProcessNames = [
+    "order_remove_courier1",
+    "order_remove_courier2",
+    "trip_remove_driver",
+    "trip_assign_driver",
+    "request_locker_access_code",
+    "open_cell",
+    "close_cell",
+  ];
+
+  // Загрузка ошибок FSM - только после действий оператора
+  const loadOrderFsmErrors = async (targetOrderId?: number) => {
+    if (!operatorId) return;
+    
+    // Если передан конкретный orderId - загружаем ошибки для него (лимит 1)
+    if (targetOrderId) {
+      const result = await fetchFsmUserErrorsFiltered(operatorId, 1);
+      if (result?.success && Array.isArray(result.errors)) {
+        const orderIds = [targetOrderId];
+        result.errors.forEach((err: any) => {
+          if (err.fsm_state === "FAILED" && err.last_error && err.entity_id) {
+            if (!operatorProcessNames.includes(err.process_name)) return;
+            const orderId = Number(err.entity_id);
+            if (orderIds.includes(orderId)) {
+              setOrderFsmErrors(prev => ({ ...prev, [orderId]: err.last_error }));
+            }
+          }
+        });
+      }
+      return;
+    }
+    
+    // Иначе загружаем для всех заказов в текущих локерах
+    if (!lockers || lockers.length === 0) return;
+    
+    const allOrders: any[] = [];
+    lockers.forEach((locker: any) => {
+      if (locker.orders && Array.isArray(locker.orders)) {
+        locker.orders.forEach((order: any) => {
+          allOrders.push({ id: order.order_id, order_id: order.order_id });
+        });
+      }
+    });
+    
+    if (allOrders.length === 0) return;
+    
+    const updatedOrders = await loadOrdersFsmErrors(operatorId, allOrders, operatorProcessNames);
+    const errorsMap: Record<number, string> = {};
+    updatedOrders.forEach((order: any) => {
+      if (order.fsmError) {
+        const key = order.order_id ?? order.id;
+        errorsMap[key] = order.fsmError;
+      }
+    });
+    setOrderFsmErrors(errorsMap);
+  };
 
   // Загрузка рейсов оператора при монтировании компонента
   useEffect(() => {
@@ -160,7 +221,7 @@ export function OperatorForm({
     }
   }
 
-  const handleAssignCourier = (orderId: number, lockerId: number) => {
+  const handleAssignCourier = async (orderId: number, lockerId: number) => {
     const courierId = selectedCouriers[orderId]
     if (courierId) {
       handleAction("operator", "assign_courier", { order_id: orderId, courier_id: courierId })
@@ -273,15 +334,10 @@ export function OperatorForm({
     }))
 
     try {
-      const result = await performCellOperation(orderId, operatorId, "request_locker_access_code", { leg }, "operator", { targetRole: "courier", leg }, targetUserId)
+      await performCellOperation(orderId, operatorId, "request_locker_access_code", { leg }, "operator", { targetRole: "courier", leg, entityType: "order" }, targetUserId)
       
-      // Если в ответе есть pin, сохраняем его
-      if (result?.pin) {
-        setOrderCellStates(prev => ({
-          ...prev,
-          [orderId]: { ...prev[orderId], accessCode: result.pin }
-        }))
-      }
+      // Загружаем ошибки после действия
+      loadOrderFsmErrors(orderId);
     } catch (error) {
       console.error('Error requesting code:', error)
     } finally {
@@ -324,8 +380,11 @@ export function OperatorForm({
     }))
 
     try {
-      await performCellOperation(cellId, operatorId, "open_cell", { pin: pins[orderId] }, "operator", { targetRole: "courier", leg }, targetUserId)
-      await performCellOperation(cellId, operatorId, "open_cell", { pin: pins[orderId], leg }, "operator", { targetRole: "courier", leg }, targetUserId)
+      await performCellOperation(orderId, operatorId, "open_cell", { pin: pins[orderId] }, "operator", { targetRole: "courier", leg, entityType: "order" }, targetUserId)
+      await performCellOperation(orderId, operatorId, "open_cell", { pin: pins[orderId], leg }, "operator", { targetRole: "courier", leg, entityType: "order" }, targetUserId)
+      
+      // Загружаем ошибки после действия
+      loadOrderFsmErrors(orderId);
     } catch (error) {
       console.error('Error opening cell:', error)
     } finally {
@@ -345,7 +404,10 @@ export function OperatorForm({
     }))
 
     try {
-      await performCellOperation(cellId, operatorId, "close_cell", { leg }, "operator", { targetRole: "courier", leg }, targetUserId)
+      await performCellOperation(orderId, operatorId, "close_cell", { leg }, "operator", { targetRole: "courier", leg, entityType: "order" }, targetUserId)
+      
+      // Загружаем ошибки после действия
+      loadOrderFsmErrors(orderId);
     } catch (error) {
       console.error('Error closing cell:', error)
     } finally {
@@ -365,7 +427,10 @@ export function OperatorForm({
     }))
 
     try {
-      await performCellOperation(orderId, operatorId, "request_locker_access_code", { leg }, "operator", { targetRole: "courier", leg }, targetUserId)
+      await performCellOperation(orderId, operatorId, "request_locker_access_code", { leg }, "operator", { targetRole: "courier", leg, entityType: "order" }, targetUserId)
+      
+      // Загружаем ошибки после действия
+      loadOrderFsmErrors(orderId);
     } catch (error) {
       console.error('Error requesting error:', error)
     } finally {
@@ -651,9 +716,16 @@ export function OperatorForm({
                                         <TableCell>{order.order_id}</TableCell>
                                         <TableCell>{order.dest_cell_id}</TableCell>
                                         <TableCell>
-                                          <Badge variant="secondary">
-                                            {order.status}
-                                          </Badge>
+                                          <div className="flex flex-col gap-1">
+                                            <Badge variant="secondary">
+                                              {order.status}
+                                            </Badge>
+                                            {orderFsmErrors[order.order_id] && (
+                                              <Badge variant="destructive" className="text-xs whitespace-normal">
+                                                {orderFsmErrors[order.order_id]}
+                                              </Badge>
+                                            )}
+                                          </div>
                                         </TableCell>
                                         <TableCell>
                                           {diffHours > 0 && `${diffHours}${t.operator.hours} `}

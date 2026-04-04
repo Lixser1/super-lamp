@@ -103,26 +103,12 @@ export function CourierForm({
           accessCode: undefined,
           fsmError: null,
         })));
-        // Загружаем ошибки FSM после загрузки заказов
-        setTimeout(() => loadOrderFsmErrors(), 100);
       } catch (error) {
         console.error("Ошибка при загрузке заказов:", error);
       }
     };
 
-    const loadUserErrors = async () => {
-      if (!selectedCourierId) return;
-      try {
-        const errorsResponse = await fetchFsmUserErrors(parseInt(selectedCourierId), 1);
-        setUserErrors(errorsResponse.errors || []);
-      } catch (error) {
-        console.error("Ошибка при загрузке ошибок пользователя:", error);
-        setUserErrors([]);
-      }
-    };
-
     loadCourierOrders();
-    loadUserErrors();
   }, [selectedCourierId]);
 
   // Фильтруем заказы в зависимости от выбранного фильтра
@@ -302,6 +288,7 @@ export function CourierForm({
       setIsErrorModalOpen(false);
       setCurrentOrderId(null);
       setSelectedErrorType("");
+      loadOrderFsmErrors();
     } catch (error) {
       console.error('Error reporting error:', error);
     } finally {
@@ -423,7 +410,7 @@ export function CourierForm({
         <Button
           size="sm"
           variant="destructive"
-          onClick={() => handleCancelCourierOrder(order.id)}
+          onClick={() => { handleCancelCourierOrder(order.id); loadOrderFsmErrors(); }}
         >
           {t.courier.cancelOrder}
         </Button>

@@ -25,16 +25,16 @@ export async function loadOrdersFsmErrors<T extends OrderWithFsmError>(
     const result = await fetchFsmUserErrorsFiltered(userId, 1);
     
     if (result?.success && Array.isArray(result.errors)) {
-      const orderIds = orders.map(o => o.id);
+      const orderIds = orders.map(o => Number(o.id ?? o.order_id));
       const errorsMap: Record<number, string> = {};
       
       result.errors.forEach((err: any) => {
         if (err.fsm_state === "FAILED" && err.last_error && err.entity_id) {
-          // Фильтруем по process_name
-          if (!processNames.includes(err.process_name)) return;
+          if (!processNames.includes(err.process_name)) {
+            return;
+          }
           
           const orderId = Number(err.entity_id);
-          // Фильтруем по entity_id (только заказы пользователя)
           if (orderIds.includes(orderId)) {
             if (!errorsMap[orderId]) {
               errorsMap[orderId] = err.last_error;
@@ -45,7 +45,7 @@ export async function loadOrdersFsmErrors<T extends OrderWithFsmError>(
 
       return orders.map(order => ({
         ...order,
-        fsmError: errorsMap[order.id] || null,
+        fsmError: errorsMap[Number(order.id ?? order.order_id)] || null,
       }));
     }
   } catch (error) {
