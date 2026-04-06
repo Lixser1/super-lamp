@@ -22,20 +22,26 @@ export async function loadOrdersFsmErrors<T extends OrderWithFsmError>(
   if (!userId || orders.length === 0) return orders;
 
   try {
+    console.log('[loadOrdersFsmErrors] Fetching errors for userId:', userId, 'orders:', orders.length, 'processNames:', processNames);
     const result = await fetchFsmUserErrorsFiltered(userId, 1);
+    console.log('[loadOrdersFsmErrors] Result:', result);
     
     if (result?.success && Array.isArray(result.errors)) {
       const orderIds = orders.map(o => Number(o.id ?? o.order_id));
+      console.log('[loadOrdersFsmErrors] Order IDs to check:', orderIds);
       const errorsMap: Record<number, string> = {};
       
       result.errors.forEach((err: any) => {
+        console.log('[loadOrdersFsmErrors] Checking error:', err.entity_id, err.process_name, err.fsm_state, err.last_error);
         if (err.fsm_state === "FAILED" && err.last_error && err.entity_id) {
           if (!processNames.includes(err.process_name)) {
+            console.log('[loadOrdersFsmErrors] Skipping - process not in list:', err.process_name);
             return;
           }
           
           const orderId = Number(err.entity_id);
           if (orderIds.includes(orderId)) {
+            console.log('[loadOrdersFsmErrors] Found error for order:', orderId, err.last_error);
             if (!errorsMap[orderId]) {
               errorsMap[orderId] = err.last_error;
             }
@@ -43,6 +49,7 @@ export async function loadOrdersFsmErrors<T extends OrderWithFsmError>(
         }
       });
 
+      console.log('[loadOrdersFsmErrors] Errors map:', errorsMap);
       return orders.map(order => ({
         ...order,
         fsmError: errorsMap[Number(order.id ?? order.order_id)] || null,

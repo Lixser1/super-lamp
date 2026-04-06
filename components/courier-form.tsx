@@ -7,7 +7,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
-import { fetchOrdersByCourier, fetchFsmUserErrors, fetchAccessCodeView, enqueueFsmRequest, makeFsmEnqueueRequest } from "@/lib/api"
+import { fetchOrdersByCourier, fetchAccessCodeView, enqueueFsmRequest, makeFsmEnqueueRequest } from "@/lib/api"
 import { loadOrdersFsmErrors } from "@/lib/utils"
 import { useEffect, useState } from "react"
 import { performCellOperation } from "@/lib/utils"
@@ -50,10 +50,7 @@ export function CourierForm({
   // Локальное состояние для заказов курьера
   const [assignedOrders, setAssignedOrders] = useState<any[]>([]);
   const [courierOrdersFilter, setCourierOrdersFilter] = useState<"all" | "active" | "archive">("active");
-  const [pinCodes, setPinCodes] = useState<{ [orderId: number]: string }>({});
   const [userErrors, setUserErrors] = useState<any[]>([]);
-  const [isLoadingUsers, setIsLoadingUsers] = useState(false);
-  const [isRefreshingClient, setIsRefreshingClient] = useState(false);
   const [isErrorModalOpen, setIsErrorModalOpen] = useState(false);
   const [selectedErrorType, setSelectedErrorType] = useState<string>("");
   const [currentOrderId, setCurrentOrderId] = useState<number | null>(null);
@@ -80,8 +77,14 @@ export function CourierForm({
 
   // Загрузка ошибок FSM для заказов курьера
   const loadOrderFsmErrors = async () => {
-    if (!selectedCourierId || assignedOrders.length === 0) return;
-    const updatedOrders = await loadOrdersFsmErrors(parseInt(selectedCourierId), assignedOrders, courierProcessNames);
+    const courierId = parseInt(selectedCourierId);
+    if (!selectedCourierId || isNaN(courierId) || assignedOrders.length === 0) {
+      console.log('[Courier] Skipping FSM errors load - invalid courierId:', selectedCourierId);
+      return;
+    }
+    console.log('[Courier] Loading FSM errors for courier:', courierId, 'orders:', assignedOrders.length);
+    const updatedOrders = await loadOrdersFsmErrors(courierId, assignedOrders, courierProcessNames);
+    console.log('[Courier] FSM errors loaded, updated orders:', updatedOrders.filter(o => o.fsmError).map(o => ({ id: o.id, fsmError: o.fsmError })));
     setAssignedOrders(updatedOrders);
   };
 
@@ -212,10 +215,11 @@ export function CourierForm({
         action: "open_cell",
         data: result,
       });
-      loadOrderFsmErrors();
     } catch (error) {
       console.error('Error opening cell:', error);
     } finally {
+      // Загружаем ошибки FSM после любого исхода
+      loadOrderFsmErrors();
       setAssignedOrders(prev =>
         prev.map(order =>
           order.id === orderId ? { ...order, isOpeningCell: false } : order
@@ -239,10 +243,11 @@ export function CourierForm({
         action: "close_cell",
         data: result,
       });
-      loadOrderFsmErrors();
     } catch (error) {
       console.error('Error closing cell:', error);
     } finally {
+      // Загружаем ошибки FSM после любого исхода
+      loadOrderFsmErrors();
       setAssignedOrders(prev =>
         prev.map(order =>
           order.id === orderId ? { ...order, isClosingCell: false } : order
