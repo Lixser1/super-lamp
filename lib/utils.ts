@@ -23,7 +23,7 @@ export async function loadOrdersFsmErrors<T extends OrderWithFsmError>(
 
   try {
     console.log('[loadOrdersFsmErrors] Fetching errors for userId:', userId, 'orders:', orders.length, 'processNames:', processNames);
-    const result = await fetchFsmUserErrorsFiltered(userId, 1);
+    const result = await fetchFsmUserErrorsFiltered(userId, 50);
     console.log('[loadOrdersFsmErrors] Result:', result);
     
     if (result?.success && Array.isArray(result.errors)) {

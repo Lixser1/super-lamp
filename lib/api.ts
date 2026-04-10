@@ -29,7 +29,7 @@ export async function fetchAccessCodeView(
 }
 
 export async function fetchOrdersByCourier(courier_id: string | number) {
-  const response = await fetch(`/api/proxy/orders/courier/${courier_id}`, {
+  const response = await fetch(`/api/proxy/courier/exchange?courier_id=${courier_id}`, {
     method: 'GET',
     headers: {
       'Content-Type': 'application/json',
@@ -40,7 +40,19 @@ export async function fetchOrdersByCourier(courier_id: string | number) {
     throw new Error(`Request failed: ${response.status} ${response.statusText}`);
   }
 
-  return response.json();
+  const data = await response.json();
+  // Новый endpoint возвращает объект с ключом orders
+  const orders = data.orders || [];
+  
+  // Маппим поля для совместимости с UI
+  return orders.map((order: any) => ({
+    ...order,
+    // Для pickup заказов - адрес и ячейка отправителя
+    // Для delivery заказов - адрес и ячейка получателя
+    lockerAddress: order.type === 'pickup' ? order.source_address : order.dest_address,
+    cell: order.type === 'pickup' ? order.source_cell_code : order.dest_cell_code,
+    size: order.cell_size,
+  }));
 }
 
 export async function fetchOrdersByClient(client_id: string | number) {

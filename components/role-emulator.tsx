@@ -342,7 +342,18 @@ const fetchAllOrders = async () => {
 
     const data = await response.json();
     console.log("Fetched orders from backend:", data); // Лог для отладки
-    return data;
+    
+    // Маппим поля для совместимости с UI
+    const orders = (data.orders || []).map((order: any) => ({
+      ...order,
+      // Для pickup заказов - адрес и ячейка отправителя
+      // Для delivery заказов - адрес и ячейка получателя
+      lockerAddress: order.type === 'pickup' ? order.source_address : order.dest_address,
+      cell: order.type === 'pickup' ? order.source_cell_code : order.dest_cell_code,
+      size: order.cell_size,
+    }));
+    
+    return { ...data, orders };
   } catch (error) {
     console.error('Error fetching orders:', error);
     return mockOrders; // Возвращаем мок-данные только в случае ошибки
