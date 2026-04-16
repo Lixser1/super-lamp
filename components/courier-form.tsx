@@ -7,11 +7,11 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
-import { fetchOrdersByCourier, fetchAccessCodeView, enqueueFsmRequest, makeFsmEnqueueRequest } from "@/lib/api"
-import { loadOrdersFsmErrors } from "@/lib/utils"
-import { useEffect, useState } from "react"
+import { fetchOrdersByCourier, fetchAccessCodeView, enqueueFsmRequest, makeFsmEnqueueRequest, subscribeToFsmInstanceEvents } from "@/lib/api"
+import { useEffect, useState, useRef } from "react"
 import { performCellOperation } from "@/lib/utils"
 import { getLegFromStatus } from "@/lib/cell-operations"
+import { SSEErrorTracker } from "@/components/sse-error-tracker"
 
 interface CourierFormProps {
   selectedCourierId: string;
@@ -55,6 +55,10 @@ export function CourierForm({
   const [selectedErrorType, setSelectedErrorType] = useState<string>("");
   const [currentOrderId, setCurrentOrderId] = useState<number | null>(null);
   const [isConfirmingDelivery, setIsConfirmingDelivery] = useState<{ [orderId: number]: boolean }>({});
+  const [currentInstanceId, setCurrentInstanceId] = useState<number | null>(null);
+  const [sseLastError, setSseLastError] = useState<string | null>(null);
+  const [sseSuccess, setSseSuccess] = useState(false);
+  const sseSubscriptionRef = useRef<any>(null);
 
   // Типы ошибок для курьера (заказы)
   const courierErrorTypes = [
@@ -75,19 +79,6 @@ export function CourierForm({
     "report_error",
   ];
 
-  // Загрузка ошибок FSM для заказов курьера
-  const loadOrderFsmErrors = async () => {
-    const courierId = parseInt(selectedCourierId);
-    if (!selectedCourierId || isNaN(courierId) || assignedOrders.length === 0) {
-      console.log('[Courier] Skipping FSM errors load - invalid courierId:', selectedCourierId);
-      return;
-    }
-    console.log('[Courier] Loading FSM errors for courier:', courierId, 'orders:', assignedOrders.length);
-    const updatedOrders = await loadOrdersFsmErrors(courierId, assignedOrders, courierProcessNames);
-    console.log('[Courier] FSM errors loaded, updated orders:', updatedOrders.filter(o => o.fsmError).map(o => ({ id: o.id, fsmError: o.fsmError })));
-    setAssignedOrders(updatedOrders);
-  };
-
   // Загружаем заказы при изменении selectedCourierId
   useEffect(() => {
     const loadCourierOrders = async () => {
@@ -105,6 +96,7 @@ export function CourierForm({
           pin: "",
           accessCode: undefined,
           fsmError: null,
+          takenAt: order.taken_at || order.updated_at || new Date().toISOString(),
         })));
       } catch (error) {
         console.error("Ошибка при загрузке заказов:", error);
@@ -114,13 +106,64 @@ export function CourierForm({
     loadCourierOrders();
   }, [selectedCourierId]);
 
-  // Фильтруем заказы в зависимости от выбранного фильтра
-  const filteredAssignedOrders = assignedOrders.filter((order) => {
-    if (courierOrdersFilter === "all") return true;
-    if (courierOrdersFilter === "active") return order.status !== "locker_closed" && order.status !== "order_cancelled";
-    if (courierOrdersFilter === "archive") return order.status === "locker_closed" || order.status === "order_cancelled";
-    return true;
-  });
+  // Подписка на SSE события для текущего instance
+  useEffect(() => {
+    if (!currentInstanceId) {
+      if (sseSubscriptionRef.current) {
+        sseSubscriptionRef.current.close();
+        sseSubscriptionRef.current = null;
+      }
+      setSseLastError(null);
+      setSseSuccess(false);
+      return;
+    }
+
+    console.log('[SSE] Subscribing to instance:', currentInstanceId);
+    sseSubscriptionRef.current = subscribeToFsmInstanceEvents(
+      currentInstanceId,
+      (data) => {
+        console.log('[SSE] Received:', data);
+        // Обработка нового формата с event_type
+        if (data.event_type === "error") {
+          setSseLastError(data.message || "Unknown error");
+          setSseSuccess(false);
+        } else if (data.event_type === "success") {
+          setSseSuccess(true);
+          setSseLastError(null);
+        }
+        // Fallback для старого формата
+        else if (data.last_error && data.last_error !== "") {
+          setSseLastError(data.last_error);
+          setSseSuccess(false);
+        } else if (data.fsm_state === "COMPLETED" || data.fsm_state === "SUCCESS") {
+          setSseSuccess(true);
+          setSseLastError(null);
+        }
+      },
+      (error) => {
+        console.log('[SSE] Error:', error);
+        setSseLastError(error);
+        setSseSuccess(false);
+      }
+    );
+
+    return () => {
+      if (sseSubscriptionRef.current) {
+        sseSubscriptionRef.current.close();
+        sseSubscriptionRef.current = null;
+      }
+    };
+  }, [currentInstanceId]);
+
+  // Фильтруем заказы в зависимости от выбранного фильтра и переворачиваем порядок
+  const filteredAssignedOrders = [...assignedOrders]
+    .filter((order) => {
+      if (courierOrdersFilter === "all") return true;
+      if (courierOrdersFilter === "active") return order.status !== "locker_closed" && order.status !== "order_cancelled";
+      if (courierOrdersFilter === "archive") return order.status === "locker_closed" || order.status === "order_cancelled";
+      return true;
+    })
+    .reverse();
 
   // Находим релевантную ошибку
   const relevantError = userErrors.find(e => ["order_assign_courier1", "cancel_order", "confirm_courier2_delivery"].includes(e.process_name));
@@ -139,6 +182,16 @@ export function CourierForm({
       
       const result = await performCellOperation(orderId, parseInt(selectedCourierId), "request_locker_access_code", { leg }, "courier");
       
+      console.log('[request_locker_access_code] Result:', result);
+      
+      // Извлекаем instance_id из data.instance_id
+      const instanceId = result?.data?.instance_id || result?.instance_id;
+      
+      // Если есть instance_id, подписываемся на SSE
+      if (instanceId) {
+        setCurrentInstanceId(instanceId);
+      }
+
       // Если в ответе есть pin, сохраняем его
       if (result?.pin) {
         setAssignedOrders(prev =>
@@ -153,7 +206,6 @@ export function CourierForm({
         action: "request_access_code",
         data: result,
       });
-      loadOrderFsmErrors();
     } catch (error) {
       console.error('Error requesting access code:', error);
     } finally {
@@ -215,11 +267,13 @@ export function CourierForm({
         action: "open_cell",
         data: result,
       });
+      const instanceId = result?.data?.instance_id || result?.instance_id;
+      if (instanceId) {
+        setCurrentInstanceId(instanceId);
+      }
     } catch (error) {
       console.error('Error opening cell:', error);
     } finally {
-      // Загружаем ошибки FSM после любого исхода
-      loadOrderFsmErrors();
       setAssignedOrders(prev =>
         prev.map(order =>
           order.id === orderId ? { ...order, isOpeningCell: false } : order
@@ -243,11 +297,13 @@ export function CourierForm({
         action: "close_cell",
         data: result,
       });
+      const instanceId = result?.data?.instance_id || result?.instance_id;
+      if (instanceId) {
+        setCurrentInstanceId(instanceId);
+      }
     } catch (error) {
       console.error('Error closing cell:', error);
     } finally {
-      // Загружаем ошибки FSM после любого исхода
-      loadOrderFsmErrors();
       setAssignedOrders(prev =>
         prev.map(order =>
           order.id === orderId ? { ...order, isClosingCell: false } : order
@@ -290,10 +346,17 @@ export function CourierForm({
         data: result,
       });
 
+      // Извлекаем instance_id из data.instance_id
+      const instanceId = result?.data?.instance_id || result?.instance_id;
+      
+      // Если есть instance_id, подписываемся на SSE
+      if (instanceId) {
+        setCurrentInstanceId(instanceId);
+      }
+
       setIsErrorModalOpen(false);
       setCurrentOrderId(null);
       setSelectedErrorType("");
-      loadOrderFsmErrors();
     } catch (error) {
       console.error('Error reporting error:', error);
     } finally {
@@ -333,7 +396,14 @@ export function CourierForm({
         action: "confirm_courier2_delivery",
         data: result,
       });
-      loadOrderFsmErrors();
+
+      // Извлекаем instance_id из data.instance_id
+      const instanceId = result?.data?.instance_id || result?.instance_id;
+      
+      // Если есть instance_id, подписываемся на SSE
+      if (instanceId) {
+        setCurrentInstanceId(instanceId);
+      }
     } catch (error) {
       console.error('Error confirming delivery:', error);
     } finally {
@@ -415,7 +485,7 @@ export function CourierForm({
         <Button
           size="sm"
           variant="destructive"
-          onClick={() => { handleCancelCourierOrder(order.id); loadOrderFsmErrors(); }}
+          onClick={() => { handleCancelCourierOrder(order.id); }}
         >
           {t.courier.cancelOrder}
         </Button>
@@ -439,26 +509,11 @@ export function CourierForm({
               <SelectContent>
                 {users.filter((user) => user.role_name === "courier").map((courier) => (
                   <SelectItem key={courier.id} value={courier.id.toString()}>
-                    {courier.name}
+                    {courier.name} {courier.city ? `(${courier.city})` : ""}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
-          </div>
-        )}
-
-        {courierMessage && (
-          <div>
-            <Badge
-              variant="default"
-              className={
-                courierMessage.includes("Ошибка") || courierMessage.includes("не удалось")
-                  ? "bg-red-600"
-                  : "bg-green-600"
-              }
-            >
-              {courierMessage}
-            </Badge>
           </div>
         )}
 
@@ -470,7 +525,20 @@ export function CourierForm({
           </div>
         )}
 
-        {/* Доступные заказы */}
+        {/* SSE ошибки в реальном времени */}
+        {currentInstanceId && (
+          <SSEErrorTracker
+            instanceId={currentInstanceId}
+            language={language}
+            onClear={() => {
+              setCurrentInstanceId(null);
+              setSseLastError(null);
+              setSseSuccess(false);
+            }}
+          />
+        )}
+
+        {/* Биржа свободных заказов */}
         <div>
           <div className="flex items-center justify-between mb-3">
             <h3 className="font-semibold">{t.courier.availableOrders}</h3>

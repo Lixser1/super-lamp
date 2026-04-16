@@ -6,10 +6,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { enqueueFsmRequest, fetchAccessCodeView, fetchOrderTrack, fetchOrdersByRecipient, makeFsmEnqueueRequest } from "@/lib/api";
+import { enqueueFsmRequest, fetchAccessCodeView, fetchOrderTrack, fetchOrdersByRecipient, makeFsmEnqueueRequest, subscribeToFsmInstanceEvents } from "@/lib/api";
 import { performCellOperation } from "@/lib/utils";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { getLegFromStatus } from "@/lib/cell-operations";
+import { SSEErrorTracker } from "@/components/sse-error-tracker";
 
 interface RecipientFormProps {
   selectedRecipientId: string;
@@ -53,6 +54,12 @@ export function RecipientForm({
 
   const [recipientOrders, setRecipientOrders] = useState<any[]>([])
   const [isLoadingRecipientOrders, setIsLoadingRecipientOrders] = useState(false)
+
+  // Состояния для SSE отслеживания
+  const [currentInstanceId, setCurrentInstanceId] = useState<number | null>(null)
+  const [sseLastError, setSseLastError] = useState<string | null>(null)
+  const [sseSuccess, setSseSuccess] = useState(false)
+  const sseSubscriptionRef = useRef<any>(null)
 
   const loadRecipientOrders = async (recipientId: string) => {
     if (!recipientId) {
@@ -146,6 +153,51 @@ export function RecipientForm({
     }
   }, [selectedRecipientId])
 
+  // Эффект для подписки на SSE события
+  useEffect(() => {
+    if (!currentInstanceId) {
+      if (sseSubscriptionRef.current) {
+        sseSubscriptionRef.current.close();
+        sseSubscriptionRef.current = null;
+      }
+      setSseLastError(null);
+      setSseSuccess(false);
+      return;
+    }
+
+    sseSubscriptionRef.current = subscribeToFsmInstanceEvents(
+      currentInstanceId,
+      (data) => {
+        // Обработка нового формата с event_type
+        if (data.event_type === "error") {
+          setSseLastError(data.message || "Unknown error");
+          setSseSuccess(false);
+        } else if (data.event_type === "success") {
+          setSseSuccess(true);
+          setSseLastError(null);
+        }
+        // Fallback для старого формата
+        else if (data.last_error && data.last_error !== "") {
+          setSseLastError(data.last_error);
+          setSseSuccess(false);
+        } else if (data.fsm_state === "COMPLETED" || data.fsm_state === "SUCCESS") {
+          setSseSuccess(true);
+          setSseLastError(null);
+        }
+      },
+      (error) => {
+        setSseLastError(error);
+        setSseSuccess(false);
+      }
+    );
+
+    return () => {
+      if (sseSubscriptionRef.current) {
+        sseSubscriptionRef.current.close();
+      }
+    };
+  }, [currentInstanceId]);
+
   // Функция для отправки запроса на создание пина (request_locker_access_code)
   const handleCreatePin = async () => {
     if (!recipientOrderDetails) return;
@@ -170,6 +222,14 @@ export function RecipientForm({
         order_id: recipientOrderDetails.id,
         result,
       });
+
+      // Извлекаем instance_id из data.instance_id
+      const instanceId = result?.data?.instance_id || result?.instance_id;
+      
+      // Если есть instance_id, подписываемся на SSE
+      if (instanceId) {
+        setCurrentInstanceId(instanceId);
+      }
     } catch (error) {
       console.error('Error creating pin:', error);
       addLog({
@@ -234,6 +294,14 @@ export function RecipientForm({
         order_id: recipientOrderDetails.id,
         data: result,
       });
+
+      // Извлекаем instance_id из data.instance_id
+      const instanceId = result?.data?.instance_id || result?.instance_id;
+      
+      // Если есть instance_id, подписываемся на SSE
+      if (instanceId) {
+        setCurrentInstanceId(instanceId);
+      }
     } catch (error) {
       console.error('Error opening cell:', error);
     } finally {
@@ -265,6 +333,14 @@ export function RecipientForm({
         order_id: recipientOrderDetails.id,
         data: result,
       });
+
+      // Извлекаем instance_id из data.instance_id
+      const instanceId = result?.data?.instance_id || result?.instance_id;
+      
+      // Если есть instance_id, подписываемся на SSE
+      if (instanceId) {
+        setCurrentInstanceId(instanceId);
+      }
     } catch (error) {
       console.error('Error closing cell:', error);
     } finally {
@@ -347,6 +423,10 @@ export function RecipientForm({
       const leg = getLegFromStatus(order.status);
       const result = await performCellOperation(order.id, parseInt(selectedRecipientId), "request_locker_access_code", { leg }, "recipient");
       updateRecipientOrderById(order.id, { accessCode: result?.pin || order.accessCode });
+      const instanceId = result?.data?.instance_id || result?.instance_id;
+      if (instanceId) {
+        setCurrentInstanceId(instanceId);
+      }
       addLog({
         role: "recipient",
         action: "request_access_code",
@@ -379,6 +459,10 @@ export function RecipientForm({
     try {
       const leg = getLegFromStatus(order.status);
       const result = await performCellOperation(order.id, parseInt(selectedRecipientId), "open_cell", { pin: order.pin, leg }, "recipient");
+      const instanceId = result?.data?.instance_id || result?.instance_id;
+      if (instanceId) {
+        setCurrentInstanceId(instanceId);
+      }
       addLog({ role: "recipient", action: "open_cell", order_id: order.id, data: result });
     } catch (error) {
       console.error('Error opening cell for order:', error);
@@ -392,6 +476,10 @@ export function RecipientForm({
 
     try {
       const result = await performCellOperation(order.id, parseInt(selectedRecipientId), "close_cell", {}, "recipient");
+      const instanceId = result?.data?.instance_id || result?.instance_id;
+      if (instanceId) {
+        setCurrentInstanceId(instanceId);
+      }
       addLog({ role: "recipient", action: "close_cell", order_id: order.id, data: result });
     } catch (error) {
       console.error('Error closing cell for order:', error);
@@ -492,6 +580,19 @@ export function RecipientForm({
                 <span className="font-semibold">{t.recipient.cell}:</span>
                 <Badge variant="outline">{recipientOrderDetails.cell}</Badge>
               </div>
+
+              {/* SSE ошибки в реальном времени */}
+              {currentInstanceId && (
+                <SSEErrorTracker
+                  instanceId={currentInstanceId}
+                  language={language}
+                  onClear={() => {
+                    setCurrentInstanceId(null);
+                    setSseLastError(null);
+                    setSseSuccess(false);
+                  }}
+                />
+              )}
             </div>
           )}
 

@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useState, useEffect, Fragment } from "react"
+import React, { useState, useEffect, Fragment, useRef } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Button } from "@/components/ui/button"
@@ -9,9 +9,10 @@ import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { useLanguage } from "@/lib/language-context"
 import { mockDriverExchangeOrders, mockDriverAssignedOrders } from "@/lib/mock-data"
-import { fetchOperatorTrips, fetchOperatorLockers, fetchUsers, enqueueFsmRequest, makeFsmEnqueueRequest, fetchAccessCodeView, fetchFsmUserErrorsFiltered } from "@/lib/api"
-import { performCellOperation, loadOrdersFsmErrors } from "@/lib/utils"
+import { fetchOperatorTrips, fetchOperatorLockers, fetchUsers, enqueueFsmRequest, makeFsmEnqueueRequest, fetchAccessCodeView, subscribeToFsmInstanceEvents } from "@/lib/api"
+import { performCellOperation } from "@/lib/utils"
 import { getLegFromStatus } from "@/lib/cell-operations"
+import { SSEErrorTracker } from "@/components/sse-error-tracker"
 
 interface OperatorFormProps {
   addLog: (log: any) => void
@@ -63,6 +64,12 @@ export function OperatorForm({
 
   // State для ошибок FSM заказов
   const [orderFsmErrors, setOrderFsmErrors] = useState<Record<number, string>>({});
+  
+  // SSE состояния для отслеживания ошибок
+  const [currentInstanceId, setCurrentInstanceId] = useState<number | null>(null);
+  const [sseLastError, setSseLastError] = useState<string | null>(null);
+  const [sseSuccess, setSseSuccess] = useState(false);
+  const sseSubscriptionRef = useRef<any>(null);
 
   // Process names для оператора
   const operatorProcessNames = [
@@ -110,16 +117,6 @@ export function OperatorForm({
     });
     
     if (allOrders.length === 0) return;
-    
-    const updatedOrders = await loadOrdersFsmErrors(operatorId, allOrders, operatorProcessNames);
-    const errorsMap: Record<number, string> = {};
-    updatedOrders.forEach((order: any) => {
-      if (order.fsmError) {
-        const key = order.order_id ?? order.id;
-        errorsMap[key] = order.fsmError;
-      }
-    });
-    setOrderFsmErrors(errorsMap);
   };
 
   // Загрузка рейсов оператора при монтировании компонента
@@ -178,6 +175,52 @@ export function OperatorForm({
 
     loadUsers()
   }, [])
+
+  // Эффект для подписки на SSE события
+  useEffect(() => {
+    if (!currentInstanceId) {
+      if (sseSubscriptionRef.current) {
+        sseSubscriptionRef.current.close();
+        sseSubscriptionRef.current = null;
+      }
+      setSseLastError(null);
+      setSseSuccess(false);
+      return;
+    }
+
+    sseSubscriptionRef.current = subscribeToFsmInstanceEvents(
+      currentInstanceId,
+      (data) => {
+        // Обработка нового формата с event_type
+        if (data.event_type === "error") {
+          setSseLastError(data.message || "Unknown error");
+          setSseSuccess(false);
+        } else if (data.event_type === "success") {
+          setSseSuccess(true);
+          setSseLastError(null);
+        }
+        // Fallback для старого формата
+        else if (data.last_error && data.last_error !== "") {
+          setSseLastError(data.last_error);
+          setSseSuccess(false);
+        } else if (data.fsm_state === "COMPLETED" || data.fsm_state === "SUCCESS") {
+          setSseSuccess(true);
+          setSseLastError(null);
+        }
+      },
+      (error) => {
+        setSseLastError(error);
+        setSseSuccess(false);
+      }
+    );
+
+    return () => {
+      if (sseSubscriptionRef.current) {
+        sseSubscriptionRef.current.close();
+      }
+    };
+  }, [currentInstanceId]);
+  
   const { t, language } = useLanguage()
 
   const handleAction = (role: string, action: string, extraData?: any) => {
@@ -195,7 +238,7 @@ export function OperatorForm({
       const trip = operatorTrips.find(t => t.trip_id === tripId)
       const driverUserId = trip?.driver_user_id
       
-      await sendFsmRequest({
+      const result = await sendFsmRequest({
         entityType: 'trip',
         entityId: tripId,
         processName: 'trip_remove_driver',
@@ -203,13 +246,21 @@ export function OperatorForm({
         targetRole: 'driver',
       })
 
-      // Обновляем список рейсов после успешного снятия
-      const updatedTrips = await fetchOperatorTrips()
-      setOperatorTrips(updatedTrips)
+      // Извлекаем instance_id из ответа
+      const instanceId = result?.data?.instance_id || result?.instance_id;
+      
+      // Если есть instance_id, подписываемся на SSE
+      if (instanceId) {
+        setCurrentInstanceId(instanceId);
+      } else {
+        // Если нет instance_id, обновляем список рейсов сразу
+        const updatedTrips = await fetchOperatorTrips()
+        setOperatorTrips(updatedTrips)
+      }
     } catch (error: any) {
       console.error('Error removing trip:', error)
       const errorMessage = error?.response?.data?.message || error?.message || (language === "ru" ? "Ошибка снятия рейса" : "Error removing trip")
-      alert(errorMessage)
+      setSseLastError(errorMessage)
     }
   }
 
@@ -272,7 +323,7 @@ export function OperatorForm({
       : 'order_remove_courier1'
     
     try {
-      await sendFsmRequest({
+      const result = await sendFsmRequest({
         entityType: 'order',
         entityId: orderId,
         processName: processName,
@@ -280,13 +331,21 @@ export function OperatorForm({
         targetRole: 'courier',
       })
       
-      // Обновляем список локеров после успешного снятия
-      const updatedLockers = await fetchOperatorLockers()
-      setLockers(updatedLockers)
+      // Извлекаем instance_id из ответа
+      const instanceId = result?.data?.instance_id || result?.instance_id;
+      
+      // Если есть instance_id, подписываемся на SSE
+      if (instanceId) {
+        setCurrentInstanceId(instanceId);
+      } else {
+        // Если нет instance_id, обновляем список локеров сразу
+        const updatedLockers = await fetchOperatorLockers()
+        setLockers(updatedLockers)
+      }
     } catch (error: any) {
       console.error('Error removing courier:', error)
       const errorMessage = error?.response?.data?.message || error?.message || (language === "ru" ? "Ошибка снятия курьера" : "Error removing courier")
-      alert(errorMessage)
+      setSseLastError(errorMessage)
     }
   }
 
@@ -334,7 +393,11 @@ export function OperatorForm({
     }))
 
     try {
-      await performCellOperation(orderId, operatorId, "request_locker_access_code", { leg }, "operator", { targetRole: "courier", leg, entityType: "order" }, targetUserId)
+      const result = await performCellOperation(orderId, operatorId, "request_locker_access_code", { leg }, "operator", { targetRole: "courier", leg, entityType: "order" }, targetUserId)
+      const instanceId = result?.data?.instance_id || result?.instance_id;
+      if (instanceId) {
+        setCurrentInstanceId(instanceId);
+      }
       
       // Загружаем ошибки после действия
       loadOrderFsmErrors(orderId);
@@ -380,11 +443,12 @@ export function OperatorForm({
     }))
 
     try {
-      await performCellOperation(orderId, operatorId, "open_cell", { pin: pins[orderId] }, "operator", { targetRole: "courier", leg, entityType: "order" }, targetUserId)
+      const result = await performCellOperation(orderId, operatorId, "open_cell", { pin: pins[orderId] }, "operator", { targetRole: "courier", leg, entityType: "order" }, targetUserId)
+      const instanceId = result?.data?.instance_id || result?.instance_id;
+      if (instanceId) {
+        setCurrentInstanceId(instanceId);
+      }
       await performCellOperation(orderId, operatorId, "open_cell", { pin: pins[orderId], leg }, "operator", { targetRole: "courier", leg, entityType: "order" }, targetUserId)
-      
-      // Загружаем ошибки после действия
-      loadOrderFsmErrors(orderId);
     } catch (error) {
       console.error('Error opening cell:', error)
     } finally {
@@ -404,10 +468,11 @@ export function OperatorForm({
     }))
 
     try {
-      await performCellOperation(orderId, operatorId, "close_cell", { leg }, "operator", { targetRole: "courier", leg, entityType: "order" }, targetUserId)
-      
-      // Загружаем ошибки после действия
-      loadOrderFsmErrors(orderId);
+      const result = await performCellOperation(orderId, operatorId, "close_cell", { leg }, "operator", { targetRole: "courier", leg, entityType: "order" }, targetUserId)
+      const instanceId = result?.data?.instance_id || result?.instance_id;
+      if (instanceId) {
+        setCurrentInstanceId(instanceId);
+      }
     } catch (error) {
       console.error('Error closing cell:', error)
     } finally {
@@ -427,7 +492,11 @@ export function OperatorForm({
     }))
 
     try {
-      await performCellOperation(orderId, operatorId, "request_locker_access_code", { leg }, "operator", { targetRole: "courier", leg, entityType: "order" }, targetUserId)
+      const result = await performCellOperation(orderId, operatorId, "request_locker_access_code", { leg }, "operator", { targetRole: "courier", leg, entityType: "order" }, targetUserId)
+      const instanceId = result?.data?.instance_id || result?.instance_id;
+      if (instanceId) {
+        setCurrentInstanceId(instanceId);
+      }
       
       // Загружаем ошибки после действия
       loadOrderFsmErrors(orderId);
@@ -451,6 +520,10 @@ export function OperatorForm({
 
     try {
       const result = await performCellOperation(tripId, operatorId, "request_locker_access_code", { leg: "pickup" }, "operator", { targetRole: "driver", leg: "pickup" }, targetUserId)
+      const instanceId = result?.data?.instance_id || result?.instance_id;
+      if (instanceId) {
+        setCurrentInstanceId(instanceId);
+      }
       
       // Если в ответе есть pin, сохраняем его
       if (result?.pin) {
@@ -499,7 +572,11 @@ export function OperatorForm({
     }))
 
     try {
-      await performCellOperation(cellId, operatorId, "open_cell", { pin: tripPins[tripId] }, "operator", { targetRole: "driver", leg: "pickup" }, targetUserId)
+      const result = await performCellOperation(cellId, operatorId, "open_cell", { pin: tripPins[tripId] }, "operator", { targetRole: "driver", leg: "pickup" }, targetUserId)
+      const instanceId = result?.data?.instance_id || result?.instance_id;
+      if (instanceId) {
+        setCurrentInstanceId(instanceId);
+      }
     } catch (error) {
       console.error('Error opening cell:', error)
     } finally {
@@ -518,7 +595,11 @@ export function OperatorForm({
     }))
 
     try {
-      await performCellOperation(cellId, operatorId, "close_cell", { leg: "pickup" }, "operator", { targetRole: "driver", leg: "pickup" }, targetUserId)
+      const result = await performCellOperation(cellId, operatorId, "close_cell", { leg: "pickup" }, "operator", { targetRole: "driver", leg: "pickup" }, targetUserId)
+      const instanceId = result?.data?.instance_id || result?.instance_id;
+      if (instanceId) {
+        setCurrentInstanceId(instanceId);
+      }
     } catch (error) {
       console.error('Error closing cell:', error)
     } finally {
@@ -537,7 +618,12 @@ export function OperatorForm({
     }))
 
     try {
-      await performCellOperation(tripId , operatorId, "request_locker_access_code", { leg: "pickup" }, "operator", { targetRole: "driver", leg: "pickup" }, targetUserId)
+      const leg = "pickup"
+      const result = await performCellOperation(tripId, operatorId, "request_locker_access_code", { leg }, "operator", { targetRole: "courier", leg, entityType: "order" }, targetUserId)
+      const instanceId = result?.data?.instance_id || result?.instance_id;
+      if (instanceId) {
+        setCurrentInstanceId(instanceId);
+      }
     } catch (error) {
       console.error('Error requesting error:', error)
     } finally {
@@ -553,7 +639,23 @@ export function OperatorForm({
       <CardHeader>
         <CardTitle>{t.operator.title}</CardTitle>
       </CardHeader>
-      <CardContent className="space-y-6">
+      
+      {/* SSE ошибки в реальном времени */}
+      {currentInstanceId && (
+        <div className="px-6 pt-4">
+          <SSEErrorTracker
+            instanceId={currentInstanceId}
+            language={language}
+            onClear={() => {
+              setCurrentInstanceId(null);
+              setSseLastError(null);
+              setSseSuccess(false);
+            }}
+          />
+        </div>
+      )}
+      
+      <CardContent className="space-y-6 pt-6">
         <div>
           <h3 className="font-semibold mb-3">{t.operator.tripFeed}</h3>
           <div className="border rounded-lg overflow-hidden">

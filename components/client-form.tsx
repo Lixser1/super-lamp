@@ -1,5 +1,5 @@
 "use client"
-import { useEffect, useState } from "react"
+import { useEffect, useState, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { Input } from "@/components/ui/input"
@@ -9,9 +9,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
 import { useLanguage } from "@/lib/language-context"
-import { fetchOrdersByClient, fetchUsers, fetchFsmUserErrors, enqueueFsmRequest, makeFsmEnqueueRequest, fetchAccessCodeView } from "@/lib/api"
-import { loadOrdersFsmErrors } from "@/lib/utils"
+import { fetchOrdersByClient, fetchUsers, enqueueFsmRequest, makeFsmEnqueueRequest, fetchAccessCodeView, subscribeToFsmInstanceEvents } from "@/lib/api"
 import { performCellOperation } from "@/lib/utils"
+import { SSEErrorTracker } from "@/components/sse-error-tracker"
 
 export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
   const [selectedClientId, setSelectedClientId] = useState<string>("")
@@ -47,6 +47,12 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
   const [isErrorModalOpen, setIsErrorModalOpen] = useState(false)
   const [selectedErrorType, setSelectedErrorType] = useState<string>("")
   const [currentOrderId, setCurrentOrderId] = useState<number | null>(null)
+
+  // Состояния для SSE отслеживания ошибок
+  const [currentInstanceId, setCurrentInstanceId] = useState<number | null>(null)
+  const [sseLastError, setSseLastError] = useState<string | null>(null)
+  const [sseSuccess, setSseSuccess] = useState(false)
+  const sseSubscriptionRef = useRef<any>(null)
 
   // Типы ошибок для клиента (заказы)
   const clientErrorTypes = [
@@ -92,25 +98,8 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
     }
   };
 
-  // Удалено - теперь используется loadOrderFsmErrors
+  // Удалено - больше не используется
   // const loadClientFsmError = async () => { ... }
-
-  // Process names которые относятся к клиенту
-  const clientProcessNames = [
-    "create_order_request",
-    "cancel_order",
-    "report_error",
-    "request_locker_access_code",
-    "open_cell",
-    "close_cell",
-  ]
-
-  // Загрузка ошибок FSM для заказов клиента
-  const loadOrderFsmErrors = async () => {
-    if (!selectedClientId || clientOrders.length === 0) return;
-    const updatedOrders = await loadOrdersFsmErrors(parseInt(selectedClientId), clientOrders, clientProcessNames);
-    setClientOrders(updatedOrders);
-  };
 
   // Очистка ошибки FSM для конкретного заказа (после успешного действия)
   const clearOrderFsmError = (orderId: number) => {
@@ -118,6 +107,51 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
       order.id === orderId ? { ...order, fsmError: null } : order
     ));
   };
+
+  // Эффект для подписки на SSE события
+  useEffect(() => {
+    if (!currentInstanceId) {
+      if (sseSubscriptionRef.current) {
+        sseSubscriptionRef.current.close();
+        sseSubscriptionRef.current = null;
+      }
+      setSseLastError(null);
+      setSseSuccess(false);
+      return;
+    }
+
+    sseSubscriptionRef.current = subscribeToFsmInstanceEvents(
+      currentInstanceId,
+      (data) => {
+        // Обработка нового формата с event_type
+        if (data.event_type === "error") {
+          setSseLastError(data.message || "Unknown error");
+          setSseSuccess(false);
+        } else if (data.event_type === "success") {
+          setSseSuccess(true);
+          setSseLastError(null);
+        }
+        // Fallback для старого формата
+        else if (data.last_error && data.last_error !== "") {
+          setSseLastError(data.last_error);
+          setSseSuccess(false);
+        } else if (data.fsm_state === "COMPLETED" || data.fsm_state === "SUCCESS") {
+          setSseSuccess(true);
+          setSseLastError(null);
+        }
+      },
+      (error) => {
+        setSseLastError(error);
+        setSseSuccess(false);
+      }
+    );
+
+    return () => {
+      if (sseSubscriptionRef.current) {
+        sseSubscriptionRef.current.close();
+      }
+    };
+  }, [currentInstanceId]);
   useEffect(() => {
     loadUsers();
   }, []);
@@ -186,6 +220,17 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
     });
 
     const result = await response.json();
+    
+    console.log('[create_order_request] Result:', result);
+    
+    // Извлекаем instance_id из data.instance_id
+    const instanceId = result?.data?.instance_id || result?.instance_id;
+    
+    // Если есть instance_id, подписываемся на SSE
+    if (instanceId) {
+      setCurrentInstanceId(instanceId);
+    }
+    
     setOrderMessage(result.message || (language === "ru" ? "Неизвестная ошибка" : "Unknown error"));
 
     if (result.success) {
@@ -226,6 +271,16 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
 
     try {
         const result = await enqueueFsmRequest(requestData);
+
+      console.log('[cancel_order] Result:', result);
+
+      // Извлекаем instance_id из data.instance_id
+      const instanceId = result?.data?.instance_id || result?.instance_id;
+      
+      // Если есть instance_id, подписываемся на SSE
+      if (instanceId) {
+        setCurrentInstanceId(instanceId);
+      }
 
       if (result.error || result.status === 'error' || result.message?.includes('cannot')) {
         setClientOrders(
@@ -269,10 +324,10 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
         role: "client",
         action: "request_access_code",
         data: result,
-      });
-      // Обновляем ошибки FSM после действия
-      loadOrderFsmErrors();
-    } catch (error) {
+      });      const instanceId = result?.data?.instance_id || result?.instance_id;
+      if (instanceId) {
+        setCurrentInstanceId(instanceId);
+      }    } catch (error) {
       console.error('Error requesting access code:', error);
     } finally {
       setClientOrders(prev =>
@@ -326,10 +381,10 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
         role: "client",
         action: "open_cell",
         data: result,
-      });
-      // Обновляем ошибки FSM после действия
-      loadOrderFsmErrors();
-    } catch (error) {
+      });      const instanceId = result?.data?.instance_id || result?.instance_id;
+      if (instanceId) {
+        setCurrentInstanceId(instanceId);
+      }    } catch (error) {
       console.error('Error opening cell:', error);
     } finally {
       setClientOrders(prev =>
@@ -354,8 +409,10 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
         action: "close_cell",
         data: result,
       });
-      // Обновляем ошибки FSM после действия
-      loadOrderFsmErrors();
+      const instanceId = result?.data?.instance_id || result?.instance_id;
+      if (instanceId) {
+        setCurrentInstanceId(instanceId);
+      }
     } catch (error) {
       console.error('Error closing cell:', error);
     } finally {
@@ -400,10 +457,17 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
         data: result,
       });
 
+      // Извлекаем instance_id из data.instance_id
+      const instanceId = result?.data?.instance_id || result?.instance_id;
+      
+      // Если есть instance_id, подписываемся на SSE
+      if (instanceId) {
+        setCurrentInstanceId(instanceId);
+      }
+
       setIsErrorModalOpen(false);
       setCurrentOrderId(null);
       setSelectedErrorType("");
-      loadOrderFsmErrors();
     } catch (error) {
       console.error('Error reporting error:', error);
     } finally {
@@ -529,6 +593,19 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
               {orderMessage}
             </Badge>
           </div>
+        )}
+
+        {/* SSE ошибки в реальном времени */}
+        {currentInstanceId && (
+          <SSEErrorTracker
+            instanceId={currentInstanceId}
+            language={language}
+            onClear={() => {
+              setCurrentInstanceId(null);
+              setSseLastError(null);
+              setSseSuccess(false);
+            }}
+          />
         )}
 
         {clientOrders.length > 0 && (

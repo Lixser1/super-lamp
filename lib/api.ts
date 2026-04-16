@@ -218,7 +218,9 @@ export async function enqueueFsmRequest(data: FsmEnqueueRequest) {
     throw new Error(errorData?.message || `Request enqueueFsmRequest failed: ${response.status} ${response.statusText}`)
   }
 
-  return response.json()
+  const result = await response.json();
+  console.log('[enqueueFsmRequest] Response:', result);
+  return result;
 }
 // Получение сущностей для FSM эмулятора
 export async function fetchFsmEntities(
@@ -289,27 +291,6 @@ export async function fetchOrderTrack(order_id: number) {
 
   if (!response.ok) {
     throw new Error(`Request fetchOrderTrack failed: ${response.status} ${response.statusText}`);
-  }
-
-  return response.json();
-}
-
-// Получение ошибок пользователя для FSM
-export async function fetchFsmUserErrors(user_id: number, limit: number) {
-  const params = new URLSearchParams({
-    user_id: String(user_id),
-    limit: String(limit),
-  });
-
-  const response = await fetch(`/api/proxy/fsm/user-errors?${params.toString()}`, {
-    method: 'GET',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-  });
-
-  if (!response.ok) {
-    throw new Error(`Request fetchFsmUserErrors failed: ${response.status} ${response.statusText}`);
   }
 
   return response.json();
@@ -395,20 +376,9 @@ export async function fetchFsmInstances(
   return response.json();
 }
 
-// Получение ошибок FSM для пользователя (использует /api/proxy/fsm/user-errors)
-export async function fetchFsmUserErrorsFiltered(
-  userId: number,
-  limit: number = 50
-) {
-  const params = new URLSearchParams({
-    user_id: String(userId),
-    limit: String(limit),
-  });
-
-  const url = `/api/proxy/fsm/user-errors?${params.toString()}`;
-  console.log('Fetching FSM user errors:', url);
-
-  const response = await fetch(url, {
+// Получение FSM instance по ID
+export async function fetchFsmInstance(instanceId: number) {
+  const response = await fetch(`/api/proxy/fsm/instance/${instanceId}`, {
     method: 'GET',
     headers: {
       'Content-Type': 'application/json',
@@ -416,9 +386,94 @@ export async function fetchFsmUserErrorsFiltered(
   });
 
   if (!response.ok) {
-    throw new Error(`Request fetchFsmUserErrorsFiltered failed: ${response.status} ${response.statusText}`);
+    throw new Error(`Request fetchFsmInstance failed: ${response.status} ${response.statusText}`);
   }
 
   return response.json();
+}
+
+// Подписка на SSE события для instance
+export function subscribeToFsmInstanceEvents(
+  instanceId: number,
+  onMessage: (data: { event_type?: string; message?: string; [key: string]: any }) => void,
+  onError: (error: string) => void
+) {
+  const eventUrl = `/api/proxy/fsm/instance/${instanceId}/stream`;
+  console.log('[SSE] Subscribing to:', eventUrl);
+  
+  const eventSource = new EventSource(eventUrl);
+
+  eventSource.onopen = () => {
+    console.log('[SSE] Connection opened');
+  };
+
+  // Обработка события success
+  eventSource.addEventListener("success", (event: any) => {
+    console.log('[SSE] Success event:', event.data);
+    try {
+      const data = JSON.parse(event.data);
+      onMessage({
+        event_type: "success",
+        message: data,
+        ...data
+      });
+    } catch (e) {
+      onMessage({
+        event_type: "success",
+        message: event.data
+      });
+    }
+  });
+
+  // Обработка события error (backend может использовать event: error или event: error_event)
+  const handleErrorEvent = (event: any) => {
+    if (event?.data) {
+      console.log('[SSE] Error event:', event.data);
+      try {
+        const data = JSON.parse(event.data);
+        onMessage({
+          event_type: "error",
+          message: data,
+          ...data
+        });
+      } catch (e) {
+        onMessage({
+          event_type: "error",
+          message: event.data
+        });
+      }
+    } else {
+      console.log('[SSE] Connection error or network issue', event);
+      onError('SSE connection error');
+    }
+  };
+
+  eventSource.addEventListener("error", handleErrorEvent);
+  eventSource.addEventListener("error_event", handleErrorEvent);
+
+  // Fallback обработка для generic onmessage
+  eventSource.onmessage = (event) => {
+    console.log('[SSE] Generic message:', event.data);
+    try {
+      const data = JSON.parse(event.data);
+      onMessage(data);
+    } catch (e) {
+      onMessage({ message: event.data });
+    }
+  };
+
+  eventSource.onerror = (event: any) => {
+    console.log('[SSE] Connection closed or network error', event);
+    if (!event?.data) {
+      onError('SSE connection error');
+    }
+  };
+
+  return {
+    close: () => {
+      console.log('[SSE] Unsubscribing');
+      eventSource.close();
+    }
+  };
 }
 

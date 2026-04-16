@@ -1,65 +1,9 @@
 import { clsx, type ClassValue } from 'clsx'
 import { twMerge } from 'tailwind-merge'
-import { makeFsmEnqueueRequest, enqueueFsmRequest, fetchFsmUserErrorsFiltered } from './api'
+import { makeFsmEnqueueRequest, enqueueFsmRequest } from './api'
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
-}
-
-// Тип для заказа с ошибкой FSM
-export type OrderWithFsmError = {
-  id: number;
-  fsmError?: string | null;
-  [key: string]: any;
-};
-
-// Универсальная функция загрузки ошибок FSM для заказов
-export async function loadOrdersFsmErrors<T extends OrderWithFsmError>(
-  userId: number,
-  orders: T[],
-  processNames: string[]
-): Promise<T[]> {
-  if (!userId || orders.length === 0) return orders;
-
-  try {
-    console.log('[loadOrdersFsmErrors] Fetching errors for userId:', userId, 'orders:', orders.length, 'processNames:', processNames);
-    const result = await fetchFsmUserErrorsFiltered(userId, 50);
-    console.log('[loadOrdersFsmErrors] Result:', result);
-    
-    if (result?.success && Array.isArray(result.errors)) {
-      const orderIds = orders.map(o => Number(o.id ?? o.order_id));
-      console.log('[loadOrdersFsmErrors] Order IDs to check:', orderIds);
-      const errorsMap: Record<number, string> = {};
-      
-      result.errors.forEach((err: any) => {
-        console.log('[loadOrdersFsmErrors] Checking error:', err.entity_id, err.process_name, err.fsm_state, err.last_error);
-        if (err.fsm_state === "FAILED" && err.last_error && err.entity_id) {
-          if (!processNames.includes(err.process_name)) {
-            console.log('[loadOrdersFsmErrors] Skipping - process not in list:', err.process_name);
-            return;
-          }
-          
-          const orderId = Number(err.entity_id);
-          if (orderIds.includes(orderId)) {
-            console.log('[loadOrdersFsmErrors] Found error for order:', orderId, err.last_error);
-            if (!errorsMap[orderId]) {
-              errorsMap[orderId] = err.last_error;
-            }
-          }
-        }
-      });
-
-      console.log('[loadOrdersFsmErrors] Errors map:', errorsMap);
-      return orders.map(order => ({
-        ...order,
-        fsmError: errorsMap[Number(order.id ?? order.order_id)] || null,
-      }));
-    }
-  } catch (error) {
-    console.error('Error loading order FSM errors:', error);
-  }
-  
-  return orders;
 }
 
 export async function performCellOperation(

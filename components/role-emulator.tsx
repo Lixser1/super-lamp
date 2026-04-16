@@ -6,7 +6,6 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Progress } from "@/components/ui/progress"
 import { Badge } from "@/components/ui/badge"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -52,7 +51,7 @@ export function RoleEmulator({ addLog, currentTest, onModeChange, onTabChange }:
   const [selectedDriverId, setSelectedDriverId] = useState<string>("200")
   const [ordersFilter, setOrdersFilter] = useState<"in" | "out">("in");
   const [recipientUserId, setRecipientUserId] = useState<string>("");
-  const [selectedCity, setSelectedCity] = useState<string>("МСК");
+  const [selectedCity, setSelectedCity] = useState<string>("");
 const [users, setUsers] = useState<User[]>([]);
 const [isLoadingUsers, setIsLoadingUsers] = useState(false);
   const [clientOrders, setClientOrders] = useState<
@@ -118,6 +117,7 @@ const [isLoadingUsers, setIsLoadingUsers] = useState(false);
 const [isRefreshingCourier, setIsRefreshingCourier] = useState(false)
 const [isRefreshingDriver, setIsRefreshingDriver] = useState(false)
 const [isRefreshingDriverReservations, setIsRefreshingDriverReservations] = useState(false)
+const [isRefreshingDriverExchange, setIsRefreshingDriverExchange] = useState(false)
 const [isRefreshingClient, setIsRefreshingClient] = useState(false)
 const [isTabActive, setIsTabActive] = useState(true)
 const [pollingInterval, setPollingInterval] = useState(20000)
@@ -126,6 +126,7 @@ const [lastFetchTime, setLastFetchTime] = useState<{ [key: string]: number }>({}
   const courierIntervalRef = useRef<NodeJS.Timeout | null>(null)
   const clientIntervalRef = useRef<NodeJS.Timeout | null>(null)
   const driverReservationsIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  const driverExchangeIntervalRef = useRef<NodeJS.Timeout | null>(null)
   
 useEffect(() => {
   fetchUsers();
@@ -461,6 +462,7 @@ const refreshDriverOrders = async () => {
     // Получаем заказы с биржи водителя
     const exchangeOrders = await fetchDriverExchangeOrders(selectedCity);
     setDriverAvailableOrders(exchangeOrders);
+    console.log("Driver exchange orders updated:", exchangeOrders.length, "orders");
   } catch (error) {
     console.error("Error refreshing driver orders:", error);
   } finally {
@@ -507,6 +509,32 @@ useEffect(() => {
     if (driverReservationsIntervalRef.current) clearInterval(driverReservationsIntervalRef.current);
   };
 }, [selectedDriverId, isTabActive, pollingInterval, lastFetchTime]);
+
+// Polling для биржи направлений водителя
+useEffect(() => {
+  if (!selectedCity || !isTabActive) return;
+
+  refreshDriverOrders();
+
+  const doPoll = async () => {
+    const now = Date.now();
+    const lastFetch = lastFetchTime['driverExchange'] || 0;
+
+    if (now - lastFetch < pollingInterval - 1000) {
+      return;
+    }
+
+    setLastFetchTime(prev => ({ ...prev, driverExchange: now }));
+    await refreshDriverOrders();
+  };
+
+  if (driverExchangeIntervalRef.current) clearInterval(driverExchangeIntervalRef.current);
+  driverExchangeIntervalRef.current = setInterval(doPoll, pollingInterval);
+
+  return () => {
+    if (driverExchangeIntervalRef.current) clearInterval(driverExchangeIntervalRef.current);
+  };
+}, [selectedCity, isTabActive, pollingInterval, lastFetchTime]);
 
   const handleTakeOrder = async (orderId: number) => {
   setCourierMessage(null);
@@ -731,6 +759,14 @@ const fetchUsers = async () => {
     const response = await fetch('/api/proxy/users');
     if (!response.ok) throw new Error('Failed to fetch users');
     const data = await response.json();
+    console.log('Fetched users data:', data);
+    // Проверяем структуру данных
+    if (Array.isArray(data)) {
+      console.log('Users cities:', data.map((u: any) => ({ id: u.id, name: u.name, role: u.role_name, city: u.city, cityType: typeof u.city })));
+    }
+    // Фильтруем только водителей с корректными городами
+    const validDrivers = data.filter((u: any) => u.role_name === "driver" && u.city && typeof u.city === "string" && u.city.trim() !== "");
+    console.log('Valid drivers:', validDrivers);
     setUsers(data);
   } catch (error) {
     console.error('Error fetching users:', error);
@@ -915,9 +951,11 @@ const fetchUsers = async () => {
   }
 const filteredAvailableOrders = availableOrders.filter((o: any) => {
   if (ordersFilter === "in") {
-    return o.type === "delivery";
+    // "в" - заказы на доставку (delivery) или новые заказы (order_created)
+    return o.type === "delivery" || o.status === "order_created";
   } else if (ordersFilter === "out") {
-    return o.type === "pickup";
+    // "из" - заказы на выдачу (pickup), которые не order_created
+    return o.type === "pickup" && o.status !== "order_created";
   }
   return false;
 });
@@ -925,12 +963,12 @@ const filteredAvailableOrders = availableOrders.filter((o: any) => {
 
   const fetchDriverExchangeOrders = async (city: string) => {
   try {
-    const cityParam = city === "МСК" ? "МСК" : "СПБ";
-    const response = await fetch(`/api/proxy/driver/exchange?city=${cityParam}`);
+    // Передаём выбранное значение напрямую без маппинга
+    const response = await fetch(`/api/proxy/driver/exchange?city=${encodeURIComponent(city)}`);
     if (!response.ok) throw new Error("Failed to fetch orders");
     const data = await response.json();
     console.log("Fetched orders:", data);
-    return data; // Возвращаем весь ответ, если структура: { orders: [...] }
+    return data;
   } catch (error) {
     console.error("Error fetching driver exchange orders:", error);
     return [];
@@ -1273,6 +1311,8 @@ const filteredAvailableOrders = availableOrders.filter((o: any) => {
     setReserves={setReserves}
     showPlacedOrders={showPlacedOrders}
     setShowPlacedOrders={setShowPlacedOrders}
+    isRefreshingDriverExchange={isRefreshingDriver}
+    onRefreshDriverExchange={refreshDriverOrders}
     mode={mode}
     t={t}
     language={language}

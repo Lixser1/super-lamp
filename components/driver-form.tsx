@@ -1,5 +1,5 @@
 "use client"
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -8,8 +8,9 @@ import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { fetchAccessCodeView, startDriverTrip, fetchDriverReservations, fetchDriverTripData, fetchOperatorTrips, enqueueFsmRequest, makeFsmEnqueueRequest, fetchFsmUserErrorsFiltered } from "@/lib/api";
-import { performCellOperation, loadOrdersFsmErrors } from "@/lib/utils";
+import { fetchAccessCodeView, startDriverTrip, fetchDriverReservations, fetchDriverTripData, fetchOperatorTrips, enqueueFsmRequest, makeFsmEnqueueRequest, subscribeToFsmInstanceEvents } from "@/lib/api";
+import { performCellOperation } from "@/lib/utils";
+import { SSEErrorTracker } from "@/components/sse-error-tracker";
 
 
 interface DriverFormProps {
@@ -54,10 +55,12 @@ interface DriverFormProps {
   setReserves: (reserves: { [orderId: number]: string }) => void;
   showPlacedOrders: boolean;
   setShowPlacedOrders: (show: boolean) => void;
+  isRefreshingDriverExchange: boolean;
+  onRefreshDriverExchange: () => void;
   mode: "create" | "run";
   t: any;
   language: string;
-  users: Array<{ id: number; name: string; role_name: string }>;
+  users: Array<{ id: number; name: string; role_name: string; city: string | null; phone: string | null }>;
   handleTakeDriverOrder: (orderId: number) => void;
   handleCancelDriverOrder: (orderId: number) => void;
   handleChangeTripState: (newState: "at_from_locker" | "in_transit" | "at_to_locker") => void;
@@ -114,6 +117,8 @@ export function DriverForm({
   setReserves,
   showPlacedOrders,
   setShowPlacedOrders,
+  isRefreshingDriverExchange,
+  onRefreshDriverExchange,
   mode,
   t,
   language,
@@ -143,41 +148,26 @@ export function DriverForm({
   const [tripData, setTripData] = useState<{ trip_id: number; orders: Array<{ order_id: number }> } | null>(null);
   const [operatorTrips, setOperatorTrips] = useState<any[]>([]);
   const [loadingOperatorTrips, setLoadingOperatorTrips] = useState(false);
-
-  // State для ошибок FSM заказов
   const [orderFsmErrors, setOrderFsmErrors] = useState<Record<number, string>>({});
-
-  // Process names для водителя
-  const driverProcessNames = [
-    "trip_assign_driver",
-    "start_trip",
-    "arrive_at_destination",
-    "place_parcel_in_cell",
-    "request_locker_access_code",
-    "open_cell",
-    "close_cell",
-    "cancel_order",
-    "driver_reservation_cancel",
-  ];
-
-  // Загрузка ошибок FSM для заказов водителя (лимит 1)
-  const loadOrderFsmErrors = async () => {
-    if (!selectedDriverId) return;
-    
-    const result = await fetchFsmUserErrorsFiltered(parseInt(selectedDriverId), 1);
-    if (result?.success && Array.isArray(result.errors)) {
-      const orderIds = loadingOrders.map(o => o.order_id);
-      result.errors.forEach((err: any) => {
-        if (err.fsm_state === "FAILED" && err.last_error && err.entity_id) {
-          if (!driverProcessNames.includes(err.process_name)) return;
-          const orderId = Number(err.entity_id);
-          if (orderIds.includes(orderId)) {
-            setOrderFsmErrors(prev => ({ ...prev, [orderId]: err.last_error }));
-          }
-        }
-      });
-    }
-  };
+  
+  // SSE состояния для отслеживания ошибок
+  const [currentInstanceId, setCurrentInstanceId] = useState<number | null>(null);
+  const [sseLastError, setSseLastError] = useState<string | null>(null);
+  const [sseSuccess, setSseSuccess] = useState(false);
+  const sseSubscriptionRef = useRef<any>(null);
+  const uniqueCities = useMemo(() => {
+    const cities = users
+      .filter((user) => 
+        user.city != null && 
+        typeof user.city === "string" && 
+        user.city !== "" &&
+        user.city.trim() !== "" &&
+        user.city.toLowerCase() !== "string"
+      )
+      .map((user) => user.city as string);
+    // Удаляем дубликаты через Set
+    return Array.from(new Set(cities));
+  }, [users]);
 
   // Загрузка рейсов оператора при монтировании компонента
   useEffect(() => {
@@ -196,6 +186,51 @@ export function DriverForm({
     loadOperatorTrips();
   }, []);
 
+  // Эффект для подписки на SSE события
+  useEffect(() => {
+    if (!currentInstanceId) {
+      if (sseSubscriptionRef.current) {
+        sseSubscriptionRef.current.close();
+        sseSubscriptionRef.current = null;
+      }
+      setSseLastError(null);
+      setSseSuccess(false);
+      return;
+    }
+
+    sseSubscriptionRef.current = subscribeToFsmInstanceEvents(
+      currentInstanceId,
+      (data) => {
+        // Обработка нового формата с event_type
+        if (data.event_type === "error") {
+          setSseLastError(data.message || "Unknown error");
+          setSseSuccess(false);
+        } else if (data.event_type === "success") {
+          setSseSuccess(true);
+          setSseLastError(null);
+        }
+        // Fallback для старого формата
+        else if (data.last_error && data.last_error !== "") {
+          setSseLastError(data.last_error);
+          setSseSuccess(false);
+        } else if (data.fsm_state === "COMPLETED" || data.fsm_state === "SUCCESS") {
+          setSseSuccess(true);
+          setSseLastError(null);
+        }
+      },
+      (error) => {
+        setSseLastError(error);
+        setSseSuccess(false);
+      }
+    );
+
+    return () => {
+      if (sseSubscriptionRef.current) {
+        sseSubscriptionRef.current.close();
+      }
+    };
+  }, [currentInstanceId]);
+
 
 
   const handleRequestAccessCode = async (orderId: number) => {
@@ -206,7 +241,10 @@ export function DriverForm({
 
     try {
       const result = await performCellOperation(orderId, parseInt(selectedDriverId), "request_locker_access_code", { leg: "pickup" }, "driver", { targetRole: "driver", leg: "pickup" });
-      loadOrderFsmErrors();
+      const instanceId = result?.data?.instance_id || result?.instance_id;
+      if (instanceId) {
+        setCurrentInstanceId(instanceId);
+      }
     } catch (error) {
       console.error('Error requesting access code:', error);
     } finally {
@@ -247,7 +285,10 @@ export function DriverForm({
 
  try {
  const result = await performCellOperation(cellId, parseInt(selectedDriverId), "open_cell", { pin: pins[orderId] }, "driver", { targetRole: "driver", leg: "pickup" });
- loadOrderFsmErrors();
+ const instanceId = result?.data?.instance_id || result?.instance_id;
+ if (instanceId) {
+   setCurrentInstanceId(instanceId);
+ }
  } catch (error) {
  console.error('Error opening cell:', error);
  } finally {
@@ -266,7 +307,10 @@ export function DriverForm({
 
  try {
  const result = await performCellOperation(cellId, parseInt(selectedDriverId), "close_cell", { leg: "pickup" }, "driver", { targetRole: "driver", leg: "pickup" });
- loadOrderFsmErrors();
+ const instanceId = result?.data?.instance_id || result?.instance_id;
+ if (instanceId) {
+   setCurrentInstanceId(instanceId);
+ }
  } catch (error) {
  console.error('Error closing cell:', error);
  } finally {
@@ -285,6 +329,10 @@ export function DriverForm({
 
  try {
  const result = await performCellOperation(cellId, parseInt(selectedDriverId), "request_locker_access_code", { leg: "pickup" }, "driver", { targetRole: "driver", leg: "pickup" });
+ const instanceId = result?.data?.instance_id || result?.instance_id;
+ if (instanceId) {
+   setCurrentInstanceId(instanceId);
+ }
  } catch (error) {
  console.error('Error requesting error:', error);
  } finally {
@@ -307,6 +355,10 @@ export function DriverForm({
  { entityType: "trip", targetRole: "driver" }
  );
  console.log('complete_trip result:', result);
+ const instanceId = result?.data?.instance_id || result?.instance_id;
+ if (instanceId) {
+   setCurrentInstanceId(instanceId);
+ }
       
  // Очищаем данные после успешного завершения рейса
  setTripData(null);
@@ -364,15 +416,23 @@ export function DriverForm({
         }
       });
 
-      await enqueueFsmRequest(request);
+      const result = await enqueueFsmRequest(request);
       
-      // Обновляем список рейсов после успешного снятия
-      const updatedTrips = await fetchOperatorTrips();
-      setOperatorTrips(updatedTrips);
+      // Извлекаем instance_id из ответа
+      const instanceId = result?.data?.instance_id || result?.instance_id;
+      
+      // Если есть instance_id, подписываемся на SSE
+      if (instanceId) {
+        setCurrentInstanceId(instanceId);
+      } else {
+        // Если нет instance_id, обновляем список рейсов сразу
+        const updatedTrips = await fetchOperatorTrips();
+        setOperatorTrips(updatedTrips);
+      }
     } catch (error: any) {
       console.error('Error removing trip:', error);
       const errorMessage = error?.response?.data?.message || error?.message || (language === "ru" ? "Ошибка снятия рейса" : "Error removing trip");
-      alert(errorMessage);
+      setSseLastError(errorMessage);
     }
   };
 
@@ -381,15 +441,34 @@ export function DriverForm({
       <CardHeader>
         <CardTitle>{t.driver.title}</CardTitle>
       </CardHeader>
-      <div className="mb-4">
+      
+      {/* SSE ошибки в реальном времени */}
+      {currentInstanceId && (
+        <div className="px-6">
+          <SSEErrorTracker
+            instanceId={currentInstanceId}
+            language={language}
+            onClear={() => {
+              setCurrentInstanceId(null);
+              setSseLastError(null);
+              setSseSuccess(false);
+            }}
+          />
+        </div>
+      )}
+      
+      <div className="mb-4 px-6 pt-4">
         <Label htmlFor="city-select">{language === "ru" ? "Город" : "City"}</Label>
         <Select value={selectedCity} onValueChange={setSelectedCity}>
           <SelectTrigger id="city-select" className="w-45">
             <SelectValue placeholder={language === "ru" ? "Выберите город" : "Select city"} />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="МСК">МСК</SelectItem>
-            <SelectItem value="СПБ">СПБ</SelectItem>
+            {uniqueCities.map((city) => (
+              <SelectItem key={city} value={city}>
+                {city}
+              </SelectItem>
+            ))}
           </SelectContent>
         </Select>
       </div>
@@ -416,6 +495,13 @@ export function DriverForm({
 <div>
 <div className="flex items-center justify-between mb-3">
 <h3 className="font-semibold">{t.driver.tripExchange}</h3>
+<div className="flex items-center gap-2">
+{isRefreshingDriverExchange && (
+  <span className="text-xs text-muted-foreground animate-pulse">
+    {language === "ru" ? "Обновление..." : "Updating..."}
+  </span>
+)}
+</div>
 </div>
 <div className="border rounded-lg overflow-hidden">
 <Table>
