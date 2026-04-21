@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { fetchAccessCodeView, startDriverTrip, fetchDriverReservations, fetchDriverTripData, fetchOperatorTrips, enqueueFsmRequest, makeFsmEnqueueRequest, subscribeToFsmInstanceEvents } from "@/lib/api";
+import { fetchAccessCodeView, startDriverTrip, fetchDriverReservations, fetchDriverTripData, fetchOperatorTrips, fetchActiveDriverTrips, enqueueFsmRequest, makeFsmEnqueueRequest, subscribeToFsmInstanceEvents } from "@/lib/api";
 import { performCellOperation } from "@/lib/utils";
 import { SSEErrorTracker } from "@/components/sse-error-tracker";
 
@@ -149,6 +149,7 @@ export function DriverForm({
   const [operatorTrips, setOperatorTrips] = useState<any[]>([]);
   const [loadingOperatorTrips, setLoadingOperatorTrips] = useState(false);
   const [orderFsmErrors, setOrderFsmErrors] = useState<Record<number, string>>({});
+  const [loadingActiveTrip, setLoadingActiveTrip] = useState(false);
   
   // SSE состояния для отслеживания ошибок
   const [currentInstanceId, setCurrentInstanceId] = useState<number | null>(null);
@@ -185,6 +186,44 @@ export function DriverForm({
 
     loadOperatorTrips();
   }, []);
+
+  // Загрузка активных рейсов водителя при изменении selectedDriverId
+  // Заполняем directOrders данными с API
+  useEffect(() => {
+    if (!selectedDriverId) return;
+    
+    const loadActiveTripOrders = async () => {
+      setLoadingActiveTrip(true);
+      try {
+        const trips = await fetchActiveDriverTrips(parseInt(selectedDriverId));
+        console.log('Active trip orders:', trips);
+        
+        if (trips && Array.isArray(trips)) {
+          // Преобразуем данные рейсов в формат для directOrders
+          const orders = trips.map((trip: any) => ({
+            order_id: trip.id,
+            status: trip.status,
+            from_city: trip.from_city,
+            to_city: trip.to_city,
+            pickup_locker_id: trip.pickup_locker_id,
+            delivery_locker_id: trip.delivery_locker_id,
+            driver_user_id: trip.driver_user_id,
+          }));
+          // Устанавливаем как прямые направления
+          setDirectOrders(orders);
+        } else {
+          setDirectOrders([]);
+        }
+      } catch (error) {
+        console.error('Error loading active trip orders:', error);
+        setDirectOrders([]);
+      } finally {
+        setLoadingActiveTrip(false);
+      }
+    };
+
+    loadActiveTripOrders();
+  }, [selectedDriverId]);
 
   // Эффект для подписки на SSE события
   useEffect(() => {
@@ -379,17 +418,41 @@ export function DriverForm({
     if (!selectedDriverId) return;
     console.log('handleStartTripByDirection called with directionId:', directionId);
     try {
-      // Получаем данные о рейсе
-      const tripResult = await fetchDriverTripData(directionId, parseInt(selectedDriverId));
-      console.log('fetchDriverTripData result:', tripResult);
-      console.log('tripResult.orders:', tripResult?.orders);
+      // Создаем рейс через FSM enqueue
+      const fsmRequest = makeFsmEnqueueRequest({
+        entity_type: "direction",
+        entity_id: directionId,
+        process_name: "start_trip",
+        user_id: parseInt(selectedDriverId),
+        target_user_id: parseInt(selectedDriverId),
+        target_role: "driver",
+      });
+
+      const result = await enqueueFsmRequest(fsmRequest);
+      console.log('FSM enqueue result:', result);
       
-      if (tripResult && tripResult.trip_id) {
-        setTripData(tripResult);
-        setTripId(tripResult.trip_id);
-        setTripState("in_transit");
-        setCurrentDirectionId(directionId);
-        console.log('tripData set with orders count:', tripResult.orders?.length);
+      // После успешного создания, подгружаем активные рейсы через polling
+      const trips = await fetchActiveDriverTrips(parseInt(selectedDriverId));
+      console.log('Active trips after start:', trips);
+      
+      if (trips && Array.isArray(trips) && trips.length > 0) {
+        // Находим наш рейс (должен быть один в статусе in_transit или только что созданный)
+        const newTrip = trips[0];
+        
+        if (newTrip.trip_id) {
+          setTripId(newTrip.trip_id);
+          setTripState("in_transit");
+          setCurrentDirectionId(directionId);
+          
+          // Устанавливаем данные рейса из polling ответа
+          setTripData({
+            trip_id: newTrip.trip_id,
+            orders: newTrip.orders || [],
+          });
+          
+          // Очищаем directOrders так как рейс начат
+          setDirectOrders([]);
+        }
       }
       
       // Обновляем резервы после успешного старта рейса
@@ -441,39 +504,38 @@ export function DriverForm({
       <CardHeader>
         <CardTitle>{t.driver.title}</CardTitle>
       </CardHeader>
-      
-      {/* SSE ошибки в реальном времени */}
-      {currentInstanceId && (
-        <div className="px-6">
-          <SSEErrorTracker
-            instanceId={currentInstanceId}
-            language={language}
-            onClear={() => {
-              setCurrentInstanceId(null);
-              setSseLastError(null);
-              setSseSuccess(false);
-            }}
-          />
-        </div>
-      )}
-      
-      <div className="mb-4 px-6 pt-4">
-        <Label htmlFor="city-select">{language === "ru" ? "Город" : "City"}</Label>
-        <Select value={selectedCity} onValueChange={setSelectedCity}>
-          <SelectTrigger id="city-select" className="w-45">
-            <SelectValue placeholder={language === "ru" ? "Выберите город" : "Select city"} />
-          </SelectTrigger>
-          <SelectContent>
-            {uniqueCities.map((city) => (
-              <SelectItem key={city} value={city}>
-                {city}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-
       <CardContent className="space-y-6">
+        {/* SSE ошибки в реальном времени - в самом верху */}
+        {currentInstanceId && (
+          <div className="pb-2">
+            <SSEErrorTracker
+              instanceId={currentInstanceId}
+              language={language}
+              onClear={() => {
+                setCurrentInstanceId(null);
+                setSseLastError(null);
+                setSseSuccess(false);
+              }}
+            />
+          </div>
+        )}
+
+        <div className="mb-4">
+          <Label htmlFor="city-select">{language === "ru" ? "Город" : "City"}</Label>
+          <Select value={selectedCity} onValueChange={setSelectedCity}>
+            <SelectTrigger id="city-select" className="w-45">
+              <SelectValue placeholder={language === "ru" ? "Выберите город" : "Select city"} />
+            </SelectTrigger>
+            <SelectContent>
+              {uniqueCities.map((city) => (
+                <SelectItem key={city} value={city}>
+                  {city}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
         {mode === "create" && (
           <div>
             <Label htmlFor="driver-id">{t.driver.driverId}</Label>
@@ -736,6 +798,12 @@ export function DriverForm({
           <div className="border-t pt-6">
             <h3 className="font-semibold mb-4">{t.driver.activeTrip}</h3>
             <div className="space-y-4">
+              {loadingActiveTrip && (
+                <div className="text-center text-muted-foreground py-4">
+                  {language === "ru" ? "Загрузка..." : "Loading..."}
+                </div>
+              )}
+
               <div className="flex items-center gap-3">
                 <Badge variant="default" className="bg-blue-600">
                   {t.driver.tripId}: {tripData?.trip_id}
@@ -750,10 +818,13 @@ export function DriverForm({
                       <TableRow>
                         <TableHead className="w-12"></TableHead>
                         <TableHead>{t.driver.orderId}</TableHead>
+                        <TableHead>{language === "ru" ? "Откуда" : "From"}</TableHead>
+                        <TableHead>{language === "ru" ? "Куда" : "To"}</TableHead>
+                        <TableHead>{t.driver.actions || "Actions"}</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {tripData?.orders && tripData.orders.length > 0 ? tripData.orders.map((order) => {
+                      {directOrders && directOrders.length > 0 ? directOrders.map((order) => {
                         const isTaken = takenDirectOrders.includes(order.order_id);
                         const canCheck = tripState === "at_from_locker" && !isTaken;
                         return (
@@ -773,12 +844,71 @@ export function DriverForm({
                                 }}
                               />
                             </TableCell>
-                            <TableCell>{order.order_id}</TableCell>
+                            <TableCell className="font-medium">#{order.order_id}</TableCell>
+                            <TableCell>{order.from_city}</TableCell>
+                            <TableCell>{order.to_city}</TableCell>
+                            <TableCell>
+                              <div className="flex flex-col gap-2">
+                                {orderStates[order.order_id]?.accessCode && (
+                                  <div className="text-xs">
+                                    <span className="font-medium">{t.client.accessCode || "Access Code"}: </span>
+                                    <span>{orderStates[order.order_id].accessCode}</span>
+                                  </div>
+                                )}
+                                <div className="flex flex-row flex-wrap gap-2 items-center">
+                                  <Button
+                                    size="sm"
+                                    onClick={() => handleRequestAccessCode(order.order_id)}
+                                    disabled={!selectedDriverId || orderStates[order.order_id]?.isRequestingCode || orderStates[order.order_id]?.isGettingCode}
+                                  >
+                                    {orderStates[order.order_id]?.isRequestingCode ? (language === "ru" ? "Запрос..." : "Requesting...") : (language === "ru" ? "Запросить код" : "Request code")}
+                                  </Button>
+                                  <Input
+                                    type="text"
+                                    placeholder="PIN"
+                                    value={pins[order.order_id] || ""}
+                                    onChange={(e) => setPins({ ...pins, [order.order_id]: e.target.value })}
+                                    className="w-20 h-8 text-xs"
+                                  />
+                                  <Button
+                                    size="sm"
+                                    onClick={() => handleGetAccessCode(order.order_id)}
+                                    disabled={!selectedDriverId || orderStates[order.order_id]?.isGettingCode || orderStates[order.order_id]?.isRequestingCode}
+                                  >
+                                    {orderStates[order.order_id]?.isGettingCode ? (language === "ru" ? "Получаю..." : "Getting...") : (language === "ru" ? "Получить код" : "Get code")}
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => handleOpenCell(order.order_id, order.pickup_locker_id)}
+                                    disabled={!selectedDriverId || orderStates[order.order_id]?.isOpeningCell || orderStates[order.order_id]?.isClosingCell || orderStates[order.order_id]?.isRequestingError || !pins[order.order_id]}
+                                  >
+                                    {orderStates[order.order_id]?.isOpeningCell ? (language === "ru" ? "Открываю..." : "Opening...") : t.client.openCell}
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => handleCloseCell(order.order_id, order.pickup_locker_id)}
+                                    disabled={!selectedDriverId || orderStates[order.order_id]?.isClosingCell || orderStates[order.order_id]?.isOpeningCell || orderStates[order.order_id]?.isRequestingError}
+                                  >
+                                    {orderStates[order.order_id]?.isClosingCell ? (language === "ru" ? "Закрываю..." : "Closing...") : t.client.closeCell}
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="destructive"
+                                    onClick={() => handleRequestError(order.order_id, order.pickup_locker_id)}
+                                    disabled={!selectedDriverId || orderStates[order.order_id]?.isRequestingError || orderStates[order.order_id]?.isOpeningCell || orderStates[order.order_id]?.isClosingCell}
+                                  >
+                                    {orderStates[order.order_id]?.isRequestingError ? (language === "ru" ? "Отправка..." : "Sending...") : t.client.error}
+                                  </Button>
+                                </div>
+                              </div>
+                            </TableCell>
                           </TableRow>
                         );
                       }) : (
                         <TableRow>
-                          <TableCell colSpan={2} className="text-center text-muted-foreground">
+                          <TableCell colSpan={5} className="text-center text-muted-foreground">
                             {language === "ru" ? "Нет заказов" : "No orders"}
                           </TableCell>
                         </TableRow>
@@ -796,24 +926,24 @@ export function DriverForm({
                       {t.driver.takeSelected}
                     </Button>
                   )}
+                  {tripState === "at_from_locker" && currentDirectionId && (
+                    <Button
+                      size="sm"
+                      variant="default"
+                      onClick={() => handleStartTripByDirection(currentDirectionId)}
+                      disabled={!selectedDriverId}
+                    >
+                      {t.driver.startTrip}
+                    </Button>
+                  )}
                   {tripState === "in_transit" && (
-                    <>
-                      <Button
-                        size="sm"
-                        variant="default"
-                        onClick={() => handleStartTripByDirection(Number(currentDirectionId))}
-                        disabled={!selectedDriverId}
-                      >
-                        {t.driver.startTrip}
-                      </Button>
-                      <Button
-                        size="sm"
-                        onClick={() => handleStartTrip(tripData?.trip_id)}
-                        disabled={!selectedDriverId}
-                      >
-                        {t.driver.completeTrip || "Завершение рейса"}
-                      </Button>
-                    </>
+                    <Button
+                      size="sm"
+                      onClick={() => handleStartTrip(tripData?.trip_id)}
+                      disabled={!selectedDriverId}
+                    >
+                      {t.driver.completeTrip || "Завершение рейса"}
+                    </Button>
                   )}
                 </div>
               </div>

@@ -55,6 +55,33 @@ export async function fetchOrdersByCourier(courier_id: string | number) {
   }));
 }
 
+// Получение заказов курьера через api/orders/courier/{courier_id}
+export async function fetchOrdersByCourier2(courier_id: string | number) {
+  const response = await fetch(`/api/proxy/orders/courier/${courier_id}`, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Request failed: ${response.status} ${response.statusText}`);
+  }
+
+  const orders = await response.json();
+  
+  // Маппим поля для совместимости с UI
+  return orders.map((order: any) => ({
+    ...order,
+    // Используем leg из заказа для определения типа операции
+    leg: order.leg || 'pickup',
+    // Для pickup - адрес и ячейка отправителя, для delivery - получателя
+    lockerAddress: order.leg === 'pickup' ? order.source_cell_id : order.dest_cell_id,
+    cell: order.leg === 'pickup' ? order.source_cell_id : order.dest_cell_id,
+    size: order.description,
+  }));
+}
+
 export async function fetchOrdersByClient(client_id: string | number) {
   const response = await fetch(`/api/orders/user/${client_id}`, {
     method: 'GET',
@@ -220,6 +247,7 @@ export async function enqueueFsmRequest(data: FsmEnqueueRequest) {
 
   const result = await response.json();
   console.log('[enqueueFsmRequest] Response:', result);
+  console.log('[enqueueFsmRequest] instance_id:', result?.data?.instance_id || result?.instance_id);
   return result;
 }
 // Получение сущностей для FSM эмулятора
@@ -392,6 +420,58 @@ export async function fetchFsmInstance(instanceId: number) {
   return response.json();
 }
 
+// Получение ошибок FSM для пользователя с фильтрацией
+export async function fetchFsmUserErrorsFiltered(
+  userId: number,
+  limit: number = 50
+) {
+  const params = new URLSearchParams({
+    user_id: String(userId),
+    limit: String(limit),
+  });
+
+  const response = await fetch(`/api/proxy/fsm/instances?${params.toString()}`, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Request fetchFsmUserErrorsFiltered failed: ${response.status} ${response.statusText}`);
+  }
+
+  const data = await response.json();
+  
+  // Фильтруем только FAILED инстансы с last_error
+  const errors = (data.instances || []).filter((inst: any) => 
+    inst.fsm_state === 'FAILED' && inst.last_error && inst.last_error !== ''
+  );
+  
+  return {
+    success: true,
+    errors: errors
+  };
+}
+
+// Получение активных рейсов водителя
+export async function fetchActiveDriverTrips(driverUserId: number) {
+  const url = `/api/proxy/driver/${driverUserId}/trips/in-progress`;
+
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Request fetchActiveDriverTrips failed: ${response.status} ${response.statusText}`);
+  }
+
+  return response.json();
+}
+
 // Подписка на SSE события для instance
 export function subscribeToFsmInstanceEvents(
   instanceId: number,
@@ -400,8 +480,9 @@ export function subscribeToFsmInstanceEvents(
 ) {
   const eventUrl = `/api/proxy/fsm/instance/${instanceId}/stream`;
   console.log('[SSE] Subscribing to:', eventUrl);
-  
+
   const eventSource = new EventSource(eventUrl);
+  let hasReceivedMessage = false;
 
   eventSource.onopen = () => {
     console.log('[SSE] Connection opened');
@@ -410,48 +491,77 @@ export function subscribeToFsmInstanceEvents(
   // Обработка события success
   eventSource.addEventListener("success", (event: any) => {
     console.log('[SSE] Success event:', event.data);
+    hasReceivedMessage = true;
     try {
-      const data = JSON.parse(event.data);
-      onMessage({
-        event_type: "success",
-        message: data,
-        ...data
-      });
+      // event.data может быть строкой "SUCCESS" или JSON с полем data
+      if (typeof event.data === 'string') {
+        // Если это просто строка, пытаемся распарсить как JSON
+        try {
+          const parsed = JSON.parse(event.data);
+          onMessage({
+            event_type: "success",
+            message: parsed.data || parsed.message || event.data
+          });
+        } catch {
+          // Если не JSON, используем как есть
+          onMessage({
+            event_type: "success",
+            message: event.data
+          });
+        }
+      } else if (typeof event.data === 'object' && event.data !== null) {
+        // Если это объект, извлекаем message/data
+        onMessage({
+          event_type: "success",
+          message: event.data.message || event.data.data || JSON.stringify(event.data)
+        });
+      }
     } catch (e) {
+      console.error('[SSE] Error parsing success event:', e);
       onMessage({
         event_type: "success",
-        message: event.data
+        message: 'Success'
       });
     }
   });
 
   // Обработка события error (backend может использовать event: error или event: error_event)
   const handleErrorEvent = (event: any) => {
-    if (event?.data) {
+    hasReceivedMessage = true;
+    if (event?.data !== undefined && event?.data !== null) {
       console.log('[SSE] Error event:', event.data);
-      try {
-        const data = JSON.parse(event.data);
+      // event.data может быть строкой "NO_FREE_CELLS" или JSON с полем data
+      if (typeof event.data === 'string') {
+        // Если это просто строка, пытаемся распарсить как JSON
+        try {
+          const parsed = JSON.parse(event.data);
+          onMessage({
+            event_type: "error",
+            message: parsed.data || parsed.message || event.data
+          });
+        } catch {
+          // Если не JSON, используем как есть (это и есть текст ошибки)
+          onMessage({
+            event_type: "error",
+            message: event.data
+          });
+        }
+      } else if (typeof event.data === 'object' && event.data !== null) {
+        // Если это объект, извлекаем message/data
         onMessage({
           event_type: "error",
-          message: data,
-          ...data
-        });
-      } catch (e) {
-        onMessage({
-          event_type: "error",
-          message: event.data
+          message: event.data.data || event.data.message || JSON.stringify(event.data)
         });
       }
     } else {
-      console.log('[SSE] Connection error or network issue', event);
-      onError('SSE connection error');
+      console.log('[SSE] Error event with no data', event);
     }
   };
 
-  eventSource.addEventListener("error", handleErrorEvent);
-  eventSource.addEventListener("error_event", handleErrorEvent);
+  eventSource.addEventListener("error", handleErrorEvent as (ev: MessageEvent) => void);
+  eventSource.addEventListener("error_event", handleErrorEvent as (ev: MessageEvent) => void);
 
-  // Fallback обработка для generic onmessage
+  // Fallback обработка для generic onmessage (если backend использует стандартный формат SSE)
   eventSource.onmessage = (event) => {
     console.log('[SSE] Generic message:', event.data);
     try {
@@ -463,8 +573,9 @@ export function subscribeToFsmInstanceEvents(
   };
 
   eventSource.onerror = (event: any) => {
-    console.log('[SSE] Connection closed or network error', event);
-    if (!event?.data) {
+    console.log('[SSE] Connection closed:', event);
+    // Не вызываем onError если мы уже получили сообщение - это нормальное закрытие
+    if (!hasReceivedMessage) {
       onError('SSE connection error');
     }
   };

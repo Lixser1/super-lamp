@@ -29,32 +29,54 @@ export function SSEErrorTracker({ instanceId, language, onClear }: SSEErrorTrack
       return
     }
 
+    console.log('[SSEErrorTracker] Starting subscription for instanceId:', instanceId)
+    setIsConnected(true)
+
     subscriptionRef.current = subscribeToFsmInstanceEvents(
       instanceId,
-      (data) => {
+      (data: any) => {
+        console.log('[SSEErrorTracker] Received data:', data);
+        
+        // Приоритет 1: event_type (новый формат)
         if (data.event_type === "error") {
-          // Обработка ошибки
-          setLastError(data.message || "Unknown error")
+          // Обработка ошибки - показываем значение из data.message или data.data
+          const errorMessage = data.message || data.data || "Unknown error"
+          console.log('[SSEErrorTracker] Setting error:', errorMessage)
+          setLastError(errorMessage)
           setSuccess(false)
           setSuccessMessage("")
         } else if (data.event_type === "success") {
-          // Обработка успеха
+          // Обработка успеха - показываем значение из data.message или data.data
+          const successMsg = data.message || data.data || (language === "ru" ? "Успех" : "Success")
+          console.log('[SSEErrorTracker] Setting success:', successMsg)
           setSuccess(true)
           setLastError(null)
-          setSuccessMessage(data.message || "Process completed successfully")
+          setSuccessMessage(successMsg)
         }
-        // Fallback для старого формата (если еще приходят last_error/fsm_state)
+        // Приоритет 2: last_error (старый формат)
         else if (data.last_error && data.last_error !== "") {
+          console.log('[SSEErrorTracker] Setting last_error:', data.last_error)
           setLastError(data.last_error)
           setSuccess(false)
           setSuccessMessage("")
-        } else if (data.fsm_state === "COMPLETED" || data.fsm_state === "SUCCESS") {
+        }
+        // Приоритет 3: fsm_state
+        else if (data.fsm_state === "COMPLETED" || data.fsm_state === "SUCCESS") {
+          console.log('[SSEErrorTracker] Setting success from fsm_state')
           setSuccess(true)
           setLastError(null)
-          setSuccessMessage("Process completed successfully")
+          setSuccessMessage(language === "ru" ? "Успех" : "Success")
+        }
+        // Приоритет 4: message как текст ошибки (если нет event_type)
+        else if (data.message && !data.event_type) {
+          console.log('[SSEErrorTracker] Setting message as error:', data.message)
+          setLastError(data.message)
+          setSuccess(false)
+          setSuccessMessage("")
         }
       },
-      (error) => {
+      (error: string) => {
+        console.log('[SSEErrorTracker] SSE error callback:', error);
         setLastError(error)
         setSuccess(false)
         setSuccessMessage("")
@@ -62,14 +84,13 @@ export function SSEErrorTracker({ instanceId, language, onClear }: SSEErrorTrack
       }
     )
 
-    setIsConnected(true)
-
     return () => {
+      console.log('[SSEErrorTracker] Cleaning up subscription')
       if (subscriptionRef.current) {
         subscriptionRef.current.close()
       }
     }
-  }, [instanceId])
+  }, [instanceId, language])
 
   if (!instanceId) return null
 

@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { useLanguage } from "@/lib/language-context"
 import { mockDriverExchangeOrders, mockDriverAssignedOrders } from "@/lib/mock-data"
-import { fetchOperatorTrips, fetchOperatorLockers, fetchUsers, enqueueFsmRequest, makeFsmEnqueueRequest, fetchAccessCodeView, subscribeToFsmInstanceEvents } from "@/lib/api"
+import { fetchOperatorTrips, fetchOperatorLockers, fetchUsers, enqueueFsmRequest, makeFsmEnqueueRequest, fetchAccessCodeView, subscribeToFsmInstanceEvents, fetchFsmUserErrorsFiltered } from "@/lib/api"
 import { performCellOperation } from "@/lib/utils"
 import { getLegFromStatus } from "@/lib/cell-operations"
 import { SSEErrorTracker } from "@/components/sse-error-tracker"
@@ -275,7 +275,37 @@ export function OperatorForm({
   const handleAssignCourier = async (orderId: number, lockerId: number) => {
     const courierId = selectedCouriers[orderId]
     if (courierId) {
-      handleAction("operator", "assign_courier", { order_id: orderId, courier_id: courierId })
+      const request = makeFsmEnqueueRequest({
+        entity_type: 'order',
+        entity_id: orderId,
+        process_name: 'order_assign_courier1',
+        user_id: operatorId!,
+        target_user_id: parseInt(courierId),
+        target_role: 'courier',
+      })
+
+      try {
+        const result = await enqueueFsmRequest(request)
+        
+        // Извлекаем instance_id и подписываемся на SSE
+        const instanceId = result?.data?.instance_id || result?.instance_id;
+        if (instanceId) {
+          setCurrentInstanceId(instanceId);
+        }
+        
+        handleAction("operator", "assign_courier", { order_id: orderId, courier_id: courierId })
+        
+        // Обновляем список локеров после успешного назначения
+        const updatedLockers = await fetchOperatorLockers()
+        setLockers(updatedLockers)
+        
+        // Очищаем выбранного курьера
+        setSelectedCouriers({ ...selectedCouriers, [orderId]: '' })
+      } catch (error: any) {
+        console.error('Error assigning courier:', error)
+        const errorMessage = error?.response?.data?.message || error?.message || (language === "ru" ? "Ошибка назначения курьера" : "Error assigning courier")
+        setSseLastError(errorMessage)
+      }
     }
   }
 
@@ -283,13 +313,19 @@ export function OperatorForm({
     const driverId = selectedDrivers[tripId]
     if (driverId) {
       try {
-        await sendFsmRequest({
+        const result = await sendFsmRequest({
           entityType: 'trip',
           entityId: tripId,
           processName: 'trip_assign_driver',
           targetUserId: Number(driverId),
           targetRole: 'driver',
         })
+        
+        // Извлекаем instance_id и подписываемся на SSE
+        const instanceId = result?.data?.instance_id || result?.instance_id;
+        if (instanceId) {
+          setCurrentInstanceId(instanceId);
+        }
         
         // Обновляем список рейсов после успешного назначения
         const updatedTrips = await fetchOperatorTrips()
@@ -300,7 +336,7 @@ export function OperatorForm({
       } catch (error: any) {
         console.error('Error assigning driver:', error)
         const errorMessage = error?.response?.data?.message || error?.message || (language === "ru" ? "Ошибка назначения водителя" : "Error assigning driver")
-        alert(errorMessage)
+        setSseLastError(errorMessage)
       }
     }
   }
@@ -348,7 +384,7 @@ export function OperatorForm({
       setSseLastError(errorMessage)
     }
   }
-
+      
   const handleRemoveDriver = (tripId: number) => {
     setDriverAssignedOrders(
       driverAssignedOrders.map((order) => (order.tripId === tripId ? { ...order, driverId: null } : order)),
@@ -639,23 +675,22 @@ export function OperatorForm({
       <CardHeader>
         <CardTitle>{t.operator.title}</CardTitle>
       </CardHeader>
-      
-      {/* SSE ошибки в реальном времени */}
-      {currentInstanceId && (
-        <div className="px-6 pt-4">
-          <SSEErrorTracker
-            instanceId={currentInstanceId}
-            language={language}
-            onClear={() => {
-              setCurrentInstanceId(null);
-              setSseLastError(null);
-              setSseSuccess(false);
-            }}
-          />
-        </div>
-      )}
-      
-      <CardContent className="space-y-6 pt-6">
+      <CardContent className="space-y-6">
+        {/* SSE ошибки в реальном времени - в самом верху */}
+        {currentInstanceId && (
+          <div className="pb-2">
+            <SSEErrorTracker
+              instanceId={currentInstanceId}
+              language={language}
+              onClear={() => {
+                setCurrentInstanceId(null);
+                setSseLastError(null);
+                setSseSuccess(false);
+              }}
+            />
+          </div>
+        )}
+
         <div>
           <h3 className="font-semibold mb-3">{t.operator.tripFeed}</h3>
           <div className="border rounded-lg overflow-hidden">

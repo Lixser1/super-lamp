@@ -7,7 +7,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
-import { fetchOrdersByCourier, fetchAccessCodeView, enqueueFsmRequest, makeFsmEnqueueRequest, subscribeToFsmInstanceEvents } from "@/lib/api"
+import { fetchOrdersByCourier, fetchOrdersByCourier2, fetchAccessCodeView, enqueueFsmRequest, makeFsmEnqueueRequest, subscribeToFsmInstanceEvents } from "@/lib/api"
 import { useEffect, useState, useRef } from "react"
 import { performCellOperation } from "@/lib/utils"
 import { getLegFromStatus } from "@/lib/cell-operations"
@@ -19,11 +19,13 @@ interface CourierFormProps {
   availableOrders: any[];
   ordersFilter: "in" | "out";
   setOrdersFilter: (filter: "in" | "out") => void;
+  courierOrdersFilter: "all" | "active" | "archive";
+  setCourierOrdersFilter: (filter: "all" | "active" | "archive") => void;
   courierMessage: string | null;
   mode: "create" | "run";
   t: any;
   language: string;
-  users: Array<{ id: number; name: string; role_name: string }>;
+  users: Array<{ id: number; name: string; role_name: string; city?: string }>;
   handleTakeOrder: (orderId: number) => void;
   handleCancelCourierOrder: (orderId: number) => void;
   handleCourierDeliveryAction: (orderId: number, action: string) => void;
@@ -84,7 +86,8 @@ export function CourierForm({
     const loadCourierOrders = async () => {
       if (!selectedCourierId) return;
       try {
-        const orders = await fetchOrdersByCourier(selectedCourierId);
+        // Используем новый endpoint fetchOrdersByCourier2
+        const orders = await fetchOrdersByCourier2(selectedCourierId);
         setAssignedOrders(orders.map(order => ({
           ...order,
           isRequestingError: false,
@@ -499,6 +502,21 @@ export function CourierForm({
         <CardTitle>{t.courier.title}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-6">
+        {/* SSE ошибки в реальном времени - в самом верху */}
+        {currentInstanceId && (
+          <div className="pb-2">
+            <SSEErrorTracker
+              instanceId={currentInstanceId}
+              language={language}
+              onClear={() => {
+                setCurrentInstanceId(null);
+                setSseLastError(null);
+                setSseSuccess(false);
+              }}
+            />
+          </div>
+        )}
+
         {mode === "create" && (
           <div>
             <Label htmlFor="courier-id">{t.courier.courierId}</Label>
@@ -523,19 +541,6 @@ export function CourierForm({
               {relevantError.last_error}
             </Badge>
           </div>
-        )}
-
-        {/* SSE ошибки в реальном времени */}
-        {currentInstanceId && (
-          <SSEErrorTracker
-            instanceId={currentInstanceId}
-            language={language}
-            onClear={() => {
-              setCurrentInstanceId(null);
-              setSseLastError(null);
-              setSseSuccess(false);
-            }}
-          />
         )}
 
         {/* Биржа свободных заказов */}

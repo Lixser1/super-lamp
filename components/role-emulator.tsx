@@ -12,7 +12,8 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { FSMEmulator } from "@/components/fsm-emulator"
 import { useLanguage } from "@/lib/language-context"
-import { enqueueFsmRequest, fetchOrderTrack, makeFsmEnqueueRequest, fetchOrdersByClient, startDriverLoading, fetchDriverReservations } from "@/lib/api"
+import { enqueueFsmRequest, fetchOrderTrack, makeFsmEnqueueRequest, fetchOrdersByClient, startDriverLoading, fetchDriverReservations, subscribeToFsmInstanceEvents } from "@/lib/api"
+import { SSEErrorTracker } from "@/components/sse-error-tracker"
 import {
   mockLockers,
   mockOrders,
@@ -123,6 +124,52 @@ const [isTabActive, setIsTabActive] = useState(true)
 const [pollingInterval, setPollingInterval] = useState(20000)
 const [lastFetchTime, setLastFetchTime] = useState<{ [key: string]: number }>({})
 
+// SSE tracking state
+const [currentInstanceId, setCurrentInstanceId] = useState<number | null>(null)
+const [sseLastError, setSseLastError] = useState<string | null>(null)
+const [sseSuccess, setSseSuccess] = useState(false)
+const sseSubscriptionRef = useRef<any>(null)
+
+// Подписка на SSE события
+useEffect(() => {
+  if (!currentInstanceId) {
+    if (sseSubscriptionRef.current) {
+      sseSubscriptionRef.current.close();
+      sseSubscriptionRef.current = null;
+    }
+    setSseLastError(null);
+    setSseSuccess(false);
+    return;
+  }
+
+  console.log('[SSE] Subscribing to instance:', currentInstanceId);
+  sseSubscriptionRef.current = subscribeToFsmInstanceEvents(
+    currentInstanceId,
+    (data) => {
+      console.log('[SSE] Received:', data);
+      if (data.event_type === "error") {
+        setSseLastError(data.message || "Unknown error");
+        setSseSuccess(false);
+      } else if (data.event_type === "success") {
+        setSseSuccess(true);
+        setSseLastError(null);
+      }
+    },
+    (error) => {
+      console.log('[SSE] Error:', error);
+      setSseLastError(error);
+      setSseSuccess(false);
+    }
+  );
+
+  return () => {
+    if (sseSubscriptionRef.current) {
+      sseSubscriptionRef.current.close();
+      sseSubscriptionRef.current = null;
+    }
+  };
+}, [currentInstanceId]);
+
   const courierIntervalRef = useRef<NodeJS.Timeout | null>(null)
   const clientIntervalRef = useRef<NodeJS.Timeout | null>(null)
   const driverReservationsIntervalRef = useRef<NodeJS.Timeout | null>(null)
@@ -142,7 +189,7 @@ useEffect(() => {
     if (now - lastFetch < pollingInterval - 1000) {
       return
     }
-    
+
     setLastFetchTime(prev => ({ ...prev, courier: now }))
     
     const startTime = Date.now()
@@ -549,6 +596,13 @@ useEffect(() => {
 
   try {
     const result = await enqueueFsmRequest(requestData);
+    
+    // Извлекаем instance_id и подписываемся на SSE
+    const instanceId = result?.data?.instance_id || result?.instance_id;
+    if (instanceId) {
+      setCurrentInstanceId(instanceId);
+    }
+    
     setCourierMessage(result.message || "Действие выполнено");
     handleAction("courier", "take_order", result);
     await refreshCourierOrders();
@@ -576,6 +630,13 @@ useEffect(() => {
 
       try {
         const result = await enqueueFsmRequest(requestData)
+        
+        // Извлекаем instance_id и подписываемся на SSE
+        const instanceId = result?.data?.instance_id || result?.instance_id;
+        if (instanceId) {
+          setCurrentInstanceId(instanceId);
+        }
+        
         setCourierMessage(result.message || 'Действие выполнено');
         handleAction("courier", action, result)
       } catch (error) {
@@ -642,6 +703,13 @@ useEffect(() => {
 
   try {
     const result = await enqueueFsmRequest(requestData);
+    
+    // Извлекаем instance_id и подписываемся на SSE
+    const instanceId = result?.data?.instance_id || result?.instance_id;
+    if (instanceId) {
+      setCurrentInstanceId(instanceId);
+    }
+    
     handleAction("driver", "take_order", result);
     await refreshDriverOrders();
   } catch (error) {
@@ -661,6 +729,12 @@ useEffect(() => {
 
   try {
     const result = await enqueueFsmRequest(requestData);
+
+    // Извлекаем instance_id и подписываемся на SSE
+    const instanceId = result?.data?.instance_id || result?.instance_id;
+    if (instanceId) {
+      setCurrentInstanceId(instanceId);
+    }
 
     // Обновляем локальное состояние
     const order = driverAssignedOrders.find((o) => o.id === orderId);
@@ -695,6 +769,13 @@ useEffect(() => {
 
     try {
       const result = await enqueueFsmRequest(requestData);
+      
+      // Извлекаем instance_id и подписываемся на SSE
+      const instanceId = result?.data?.instance_id || result?.instance_id;
+      if (instanceId) {
+        setCurrentInstanceId(instanceId);
+      }
+      
       handleAction("driver", "reserve_direction", result);
       setReserves({ ...reserves, [directionId]: "" }); // Очистить инпут после успешного запроса
     } catch (error) {
@@ -728,6 +809,13 @@ useEffect(() => {
 
     try {
       const result = await enqueueFsmRequest(requestData);
+      
+      // Извлекаем instance_id и подписываемся на SSE
+      const instanceId = result?.data?.instance_id || result?.instance_id;
+      if (instanceId) {
+        setCurrentInstanceId(instanceId);
+      }
+      
       handleAction("driver", "complete_loading", result);
       // Очищаем заказы для погрузки после завершения погрузки
       setLoadingOrders([]);
@@ -748,6 +836,13 @@ useEffect(() => {
 
     try {
       const result = await enqueueFsmRequest(requestData);
+      
+      // Извлекаем instance_id и подписываемся на SSE
+      const instanceId = result?.data?.instance_id || result?.instance_id;
+      if (instanceId) {
+        setCurrentInstanceId(instanceId);
+      }
+      
       handleAction("driver", "cancel_reserve", result);
     } catch (error) {
       console.error("Error cancelling reserve:", error);
@@ -786,9 +881,16 @@ const fetchUsers = async () => {
 
     try {
       const result = await enqueueFsmRequest(requestData)
+      
+      // Извлекаем instance_id и подписываемся на SSE
+      const instanceId = result?.data?.instance_id || result?.instance_id;
+      if (instanceId) {
+        setCurrentInstanceId(instanceId);
+      }
+      
       handleAction("driver", "start_trip", result)
       await refreshDriverOrders()
-	const order = driverAssignedOrders.find((o) => o.tripId === tripId)
+      const order = driverAssignedOrders.find((o) => o.tripId === tripId)
       if (!order) return
 
       setActiveTripId(tripId)
@@ -851,6 +953,13 @@ const fetchUsers = async () => {
 
     try {
       const result = await enqueueFsmRequest(requestData);
+      
+      // Извлекаем instance_id и подписываемся на SSE
+      const instanceId = result?.data?.instance_id || result?.instance_id;
+      if (instanceId) {
+        setCurrentInstanceId(instanceId);
+      }
+      
       handleAction("driver", "arrive_at_destination", result);
     } catch (error) {
       console.error("Error arriving at destination:", error);
@@ -892,6 +1001,12 @@ const fetchUsers = async () => {
     try {
       const result = await enqueueFsmRequest(requestData);
 
+      // Извлекаем instance_id и подписываемся на SSE
+      const instanceId = result?.data?.instance_id || result?.instance_id;
+      if (instanceId) {
+        setCurrentInstanceId(instanceId);
+      }
+
       // Обновляем локальное состояние
       const order = [...directOrders, ...reverseOrders].find((o) => o.id === orderId);
       if (!order) return;
@@ -932,6 +1047,13 @@ const fetchUsers = async () => {
 
     try {
       const result = await enqueueFsmRequest(requestData)
+      
+      // Извлекаем instance_id и подписываемся на SSE
+      const instanceId = result?.data?.instance_id || result?.instance_id;
+      if (instanceId) {
+        setCurrentInstanceId(instanceId);
+      }
+      
       setCourierMessage(result.message || 'Заказ отменен');
 
       // Обновляем локальное состояние
@@ -943,7 +1065,7 @@ const fetchUsers = async () => {
 
       handleAction("courier", "cancel_order", result)
 
-	  await refreshCourierOrders()
+      await refreshCourierOrders()
     } catch (error) {
       console.error('Error cancelling order:', error)
       setCourierMessage('Ошибка при отмене заказа');
@@ -1245,15 +1367,28 @@ const filteredAvailableOrders = availableOrders.filter((o: any) => {
           </TabsContent>
 
           <TabsContent value="courier" className="mt-0">
+            {/* SSE ошибки в реальном времени для курьера */}
+  {currentInstanceId && (
+    <div className="px-4 pt-2">
+      <SSEErrorTracker
+        instanceId={currentInstanceId}
+        language={language}
+        onClear={() => {
+          setCurrentInstanceId(null);
+          setSseLastError(null);
+          setSseSuccess(false);
+        }}
+      />
+    </div>
+  )}
   <CourierForm
     selectedCourierId={selectedCourierId}
     setSelectedCourierId={setSelectedCourierId}
     availableOrders={filteredAvailableOrders}
-    assignedOrders={filteredAssignedOrders}
-    courierOrdersFilter={courierOrdersFilter}
-    setCourierOrdersFilter={setCourierOrdersFilter}
     ordersFilter={ordersFilter}
     setOrdersFilter={setOrdersFilter}
+    courierOrdersFilter={courierOrdersFilter}
+    setCourierOrdersFilter={setCourierOrdersFilter}
     courierMessage={courierMessage}
     mode={mode}
     t={t}
@@ -1263,7 +1398,10 @@ const filteredAvailableOrders = availableOrders.filter((o: any) => {
     handleCancelCourierOrder={handleCancelCourierOrder}
     handleCourierDeliveryAction={handleCourierDeliveryAction}
     getCourierStatusLabel={getCourierStatusLabel}
+    addLog={addLog}
   />
+  
+  
 </TabsContent>
 
 
