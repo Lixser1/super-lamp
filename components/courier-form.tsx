@@ -166,7 +166,7 @@ export function CourierForm({
       if (courierOrdersFilter === "archive") return order.status === "locker_closed" || order.status === "order_cancelled";
       return true;
     })
-    .reverse();
+    ;
 
   // Находим релевантную ошибку
   const relevantError = userErrors.find(e => ["order_assign_courier1", "cancel_order", "confirm_courier2_delivery"].includes(e.process_name));
@@ -576,7 +576,7 @@ export function CourierForm({
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {availableOrders.map((order) => (
+                {[...availableOrders].reverse().map((order) => (
                   <TableRow key={order.id}>
                     <TableCell>{order.id}</TableCell>
                     <TableCell>{order.lockerAddress || "N/A"}</TableCell>
