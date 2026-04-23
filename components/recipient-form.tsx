@@ -6,11 +6,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { enqueueFsmRequest, fetchAccessCodeView, fetchOrderTrack, fetchOrdersByRecipient, makeFsmEnqueueRequest, subscribeToFsmInstanceEvents } from "@/lib/api";
 import { performCellOperation } from "@/lib/utils";
 import { useEffect, useState, useRef } from "react";
 import { getLegFromStatus } from "@/lib/cell-operations";
 import { SSEErrorTracker } from "@/components/sse-error-tracker";
+import { useLanguage } from "@/lib/language-context";
 
 interface RecipientFormProps {
   selectedRecipientId: string;
@@ -34,9 +36,10 @@ export function RecipientForm({
   addLog,
   highlightedAction,
 }: RecipientFormProps) {
+  const { t: tCommon } = useLanguage();
 
   const [recipientOrderId, setRecipientOrderId] = useState("")
-  const [recipientTracking, setRecipientTracking] = useState<Array<{ status: string; isCurrent: boolean; date?: string; time?: string }>>([])
+  const [recipientTracking, setRecipientTracking] = useState<Array<{ status: string; isCurrent: boolean; isCompleted: boolean; date?: string; time?: string }>>([])
   const [recipientOrderDetails, setRecipientOrderDetails] = useState<{
     id: number;
     locker: string;
@@ -54,12 +57,34 @@ export function RecipientForm({
 
   const [recipientOrders, setRecipientOrders] = useState<any[]>([])
   const [isLoadingRecipientOrders, setIsLoadingRecipientOrders] = useState(false)
+  const [selectedOrderForCell, setSelectedOrderForCell] = useState<any>(null)
 
   // Состояния для SSE отслеживания
   const [currentInstanceId, setCurrentInstanceId] = useState<number | null>(null)
   const [sseLastError, setSseLastError] = useState<string | null>(null)
   const [sseSuccess, setSseSuccess] = useState(false)
   const sseSubscriptionRef = useRef<any>(null)
+
+  // Состояния для модала ошибки
+  const [isErrorModalOpen, setIsErrorModalOpen] = useState(false)
+  const [selectedErrorType, setSelectedErrorType] = useState<string>("")
+  const [currentOrderId, setCurrentOrderId] = useState<number | null>(null)
+
+  // Полинг для заказов получателя
+  const recipientIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  const [isTabActive, setIsTabActive] = useState(true)
+  const [pollingInterval, setPollingInterval] = useState(20000)
+  const [lastFetchTime, setLastFetchTime] = useState<{ [key: string]: number }>({})
+
+  // Типы ошибок для получателя
+  const recipientErrorTypes = [
+    { value: "parcel_missing", label: language === "ru" ? "Посылка не найдена" : "Parcel missing" },
+    { value: "parcel_damaged", label: language === "ru" ? "Посылка повреждена" : "Parcel damaged" },
+    { value: "wrong_parcel", label: language === "ru" ? "Не та посылка" : "Wrong parcel" },
+    { value: "cancelled_by_client", label: language === "ru" ? "Отменено клиентом" : "Cancelled by client" },
+    { value: "manual_override", label: language === "ru" ? "Ручное вмешательство" : "Manual override" },
+    { value: "other", label: language === "ru" ? "Другая ошибка" : "Other" },
+  ]
 
   const loadRecipientOrders = async (recipientId: string) => {
     if (!recipientId) {
@@ -69,22 +94,42 @@ export function RecipientForm({
 
     setIsLoadingRecipientOrders(true)
     try {
+      const now = Date.now()
+      const lastFetch = lastFetchTime['recipient'] || 0
+
+      if (now - lastFetch < pollingInterval - 1000) {
+        return
+      }
+
+      setLastFetchTime(prev => ({ ...prev, recipient: now }))
+      const startTime = Date.now()
+
       const orders = await fetchOrdersByRecipient(recipientId)
       const normalized = orders.map((order: any) => ({
         ...order,
-        isOpeningCell: false,
-        isClosingCell: false,
-        isRequestingError: false,
-        isRequestingCode: false,
-        isGettingCode: false,
-        isSubmittingError: false,
         pin: "",
         accessCode: undefined,
+        isRequestingCode: false,
+        isGettingCode: false,
+        isOpeningCell: false,
+        isClosingCell: false,
+        isSubmittingError: false,
+        fsmError: null,
       }))
       setRecipientOrders(normalized)
+
+      const duration = Date.now() - startTime
+
+      if (duration > 3000) {
+        console.warn('Slow recipient request, increasing interval')
+        setPollingInterval(prev => Math.min(prev * 1.5, 60000))
+      } else if (duration < 1000 && pollingInterval > 5000) {
+        setPollingInterval(prev => Math.max(prev / 1.5, 5000))
+      }
     } catch (error) {
       console.error("Error loading recipient orders:", error)
       setRecipientOrders([])
+      setPollingInterval(prev => Math.min(prev * 2, 60000))
     } finally {
       setIsLoadingRecipientOrders(false)
     }
@@ -97,15 +142,14 @@ export function RecipientForm({
     try {
       const data = await fetchOrderTrack(parseInt(orderIdToLookup));
 
-      // Обработка path: фильтруем статусы с is_completed или is_current
-      const tracking = data.path
-        .filter((item: any) => item.is_completed || item.is_current)
-        .map((item: any) => ({
-          status: item.status,
-          isCurrent: item.is_current,
-          date: '', // Пустые, так как в данных нет даты
-          time: ''
-        }));
+      // Обработка path: показываем ВСЕ статусы с пометками
+      const tracking = data.path.map((item: any) => ({
+        status: item.status,
+        isCurrent: item.is_current,
+        isCompleted: item.is_completed,
+        date: '',
+        time: ''
+      }));
 
       // Обновляем детали заказа
       const isCompleted = !!data.path?.find(
@@ -152,6 +196,42 @@ export function RecipientForm({
       setRecipientOrders([])
     }
   }, [selectedRecipientId])
+
+  // Полинг для заказов получателя
+  useEffect(() => {
+    if (!selectedRecipientId || !isTabActive) return;
+
+    loadRecipientOrders(selectedRecipientId);
+
+    const doPoll = async () => {
+      const now = Date.now();
+      const lastFetch = lastFetchTime['recipient'] || 0;
+
+      if (now - lastFetch < pollingInterval - 1000) {
+        return;
+      }
+
+      setLastFetchTime(prev => ({ ...prev, recipient: now }));
+      await loadRecipientOrders(selectedRecipientId);
+    };
+
+    if (recipientIntervalRef.current) clearInterval(recipientIntervalRef.current);
+    recipientIntervalRef.current = setInterval(doPoll, pollingInterval);
+
+    return () => {
+      if (recipientIntervalRef.current) clearInterval(recipientIntervalRef.current);
+    };
+  }, [selectedRecipientId, isTabActive, pollingInterval, lastFetchTime]);
+
+  // Отслеживание активности вкладки
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      setIsTabActive(!document.hidden)
+    }
+    
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
+  }, [])
 
   // Эффект для подписки на SSE события
   useEffect(() => {
@@ -358,64 +438,6 @@ export function RecipientForm({
     )
   }
 
-  const handleRequestError = async () => {
-    if (!recipientOrderDetails) return;
-
-    setRecipientOrderDetails(prev => prev ? { ...prev, isRequestingError: true } : null);
-
-    const requestData = makeFsmEnqueueRequest({
-      entity_type: "order",
-      entity_id: recipientOrderDetails.id,
-      process_name: "request_locker_access_code",
-      user_id: parseInt(selectedRecipientId),
-      target_user_id: parseInt(selectedRecipientId),
-      user_role: "recipient",
-      metadata: {},
-    });
-
-    try {
-      const result = await enqueueFsmRequest(requestData);
-      addLog({
-        role: "recipient",
-        action: "request_locker_access_code",
-        order_id: recipientOrderDetails.id,
-        data: result,
-      });
-    } catch (error) {
-      console.error('Error requesting error:', error);
-    } finally {
-      setRecipientOrderDetails(prev => prev ? { ...prev, isRequestingError: false } : null);
-    }
-  };
-
-  const handleRequestErrorOrder = async (order: any) => {
-    updateRecipientOrderById(order.id, { isRequestingError: true });
-
-    const requestData = makeFsmEnqueueRequest({
-      entity_type: "order",
-      entity_id: order.id,
-      process_name: "request_locker_access_code",
-      user_id: parseInt(selectedRecipientId),
-      target_user_id: parseInt(selectedRecipientId),
-      user_role: "recipient",
-      metadata: {},
-    });
-
-    try {
-      const result = await enqueueFsmRequest(requestData);
-      addLog({
-        role: "recipient",
-        action: "request_locker_access_code",
-        order_id: order.id,
-        data: result,
-      });
-    } catch (error) {
-      console.error('Error requesting error for order:', error);
-    } finally {
-      updateRecipientOrderById(order.id, { isRequestingError: false });
-    }
-  };
-
   const handleRequestAccessCodeForOrder = async (order: any) => {
     updateRecipientOrderById(order.id, { isRequestingCode: true });
 
@@ -446,7 +468,7 @@ export function RecipientForm({
     try {
       const leg = getLegFromStatus(order.status);
       const result = await fetchAccessCodeView(order.id, leg, parseInt(selectedRecipientId));
-      updateRecipientOrderById(order.id, { accessCode: result.pin, isGettingCode: false });
+      updateRecipientOrderById(order.id, { accessCode: result.code || result.pin, isGettingCode: false });
     } catch (error) {
       console.error('Error getting access code for order:', error);
       updateRecipientOrderById(order.id, { isGettingCode: false });
@@ -454,11 +476,14 @@ export function RecipientForm({
   };
 
   const handleOpenOrderCell = async (order: any) => {
+    const orderData = recipientOrders.find(o => o.id === order.id);
+    if (!orderData) return;
+
     updateRecipientOrderById(order.id, { isOpeningCell: true });
 
     try {
       const leg = getLegFromStatus(order.status);
-      const result = await performCellOperation(order.id, parseInt(selectedRecipientId), "open_cell", { pin: order.pin, leg }, "recipient");
+      const result = await performCellOperation(order.id, parseInt(selectedRecipientId), "open_cell", { pin: orderData.pin, leg }, "recipient");
       const instanceId = result?.data?.instance_id || result?.instance_id;
       if (instanceId) {
         setCurrentInstanceId(instanceId);
@@ -475,7 +500,8 @@ export function RecipientForm({
     updateRecipientOrderById(order.id, { isClosingCell: true });
 
     try {
-      const result = await performCellOperation(order.id, parseInt(selectedRecipientId), "close_cell", {}, "recipient");
+      const leg = getLegFromStatus(order.status);
+      const result = await performCellOperation(order.id, parseInt(selectedRecipientId), "close_cell", { leg }, "recipient");
       const instanceId = result?.data?.instance_id || result?.instance_id;
       if (instanceId) {
         setCurrentInstanceId(instanceId);
@@ -487,6 +513,54 @@ export function RecipientForm({
       updateRecipientOrderById(order.id, { isClosingCell: false });
     }
   };
+
+  const handleRequestError = (orderId: number) => {
+    setCurrentOrderId(orderId);
+    setSelectedErrorType("");
+    setIsErrorModalOpen(true);
+  }
+
+  // Функция для отправки ошибки
+  const handleSubmitError = async () => {
+    if (!currentOrderId || !selectedErrorType) return;
+
+    updateRecipientOrderById(currentOrderId, { isSubmittingError: true });
+
+    try {
+      const requestData = makeFsmEnqueueRequest({
+        entity_type: "order",
+        entity_id: currentOrderId,
+        process_name: "report_error",
+        user_id: parseInt(selectedRecipientId),
+        metadata: { error_type: selectedErrorType },
+      });
+
+      const result = await enqueueFsmRequest(requestData);
+
+      addLog({
+        role: "recipient",
+        action: "report_error",
+        data: result,
+      });
+
+      // Извлекаем instance_id из data.instance_id
+      const instanceId = result?.data?.instance_id || result?.instance_id;
+      
+      // Если есть instance_id, подписываемся на SSE
+      if (instanceId) {
+        setCurrentInstanceId(instanceId);
+      }
+
+      setIsErrorModalOpen(false);
+      setCurrentOrderId(null);
+      setSelectedErrorType("");
+    } catch (error) {
+      console.error('Error reporting error:', error);
+    } finally {
+      updateRecipientOrderById(currentOrderId, { isSubmittingError: false });
+    }
+  }
+
   return (
     <Card>
       <CardHeader>
@@ -603,16 +677,26 @@ export function RecipientForm({
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>{t.recipient.status}</TableHead>
+                      <TableHead>Статус</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {recipientTracking.map((track, idx) => (
                       <TableRow key={idx}>
                         <TableCell>
-                          <Badge variant={track.isCurrent ? "default" : "secondary"}>
-                            {track.status}
-                          </Badge>
+                          {track.isCompleted ? (
+                            <Badge variant="default" className="bg-green-600">
+                              ✓ {track.status}
+                            </Badge>
+                          ) : track.isCurrent ? (
+                            <Badge variant="default" className="bg-blue-600">
+                              → {track.status} (текущий)
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline">
+                              ○ {track.status}
+                            </Badge>
+                          )}
                         </TableCell>
                       </TableRow>
                     ))}
@@ -650,23 +734,83 @@ export function RecipientForm({
           {recipientOrders.length > 0 && (
             <div className="mb-4">
               <h3 className="font-semibold mb-3">{language === "ru" ? "Заказы получателя" : "Recipient Orders"}</h3>
-              <div className="border rounded-lg overflow-hidden">
+              <div className="border rounded-lg overflow-x-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>
                       <TableHead>{t.recipient.orderId}</TableHead>
                       <TableHead>{t.recipient.status}</TableHead>
                       <TableHead>{t.recipient.description}</TableHead>
-                      <TableHead>{t.recipient.deliveryType || "Delivery"}</TableHead>
+                      <TableHead>Доставка</TableHead>
+                      <TableHead>Действия</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {recipientOrders.map((order) => (
                       <TableRow key={order.id}>
                         <TableCell>{order.id}</TableCell>
-                        <TableCell>{order.status}</TableCell>
+                        <TableCell>
+                          <Badge variant="outline">{order.status}</Badge>
+                        </TableCell>
                         <TableCell>{order.description}</TableCell>
                         <TableCell>{order.delivery_type}</TableCell>
+                        <TableCell>
+                          <div className="flex flex-col gap-2">
+                            {order.accessCode && (
+                              <div className="text-xs">
+                                <span className="font-medium">{language === "ru" ? "Код доступа: " : "Access Code: "}</span>
+                                <span>{order.accessCode}</span>
+                              </div>
+                            )}
+                            <div className="flex flex-row flex-wrap gap-2 items-center">
+                              <Button
+                                size="sm"
+                                onClick={() => handleRequestAccessCodeForOrder(order)}
+                                disabled={order.isRequestingCode || order.isGettingCode || order.isSubmittingError || order.isOpeningCell || order.isClosingCell}
+                              >
+                                {order.isRequestingCode ? (language === "ru" ? "Запрос..." : "Requesting...") : (language === "ru" ? "Запросить код" : "Request code")}
+                              </Button>
+                              <Button
+                                size="sm"
+                                onClick={() => handleGetOrderAccessCode(order)}
+                                disabled={order.isGettingCode || order.isRequestingCode || order.isSubmittingError || order.isOpeningCell || order.isClosingCell}
+                              >
+                                {order.isGettingCode ? (language === "ru" ? "Получаю..." : "Getting...") : (language === "ru" ? "Получить код" : "Get code")}
+                              </Button>
+                              <Input
+                                type="text"
+                                placeholder={language === "ru" ? "Введите PIN" : "Enter PIN"}
+                                value={order.pin || ""}
+                                onChange={(e) => updateRecipientOrderById(order.id, { pin: e.target.value })}
+                                className="w-24 h-8 text-xs"
+                              />
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => handleOpenOrderCell(order)}
+                                disabled={order.isOpeningCell || order.isClosingCell || order.isSubmittingError || !order.pin}
+                              >
+                                {order.isOpeningCell ? (language === "ru" ? "Открываю..." : "Opening...") : (language === "ru" ? "Открыть ячейку" : "Open cell")}
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => handleCloseOrderCell(order)}
+                                disabled={order.isClosingCell || order.isOpeningCell || order.isSubmittingError}
+                              >
+                                {order.isClosingCell ? (language === "ru" ? "Закрываю..." : "Closing...") : (language === "ru" ? "Закрыть ячейку" : "Close cell")}
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="destructive"
+                                onClick={() => handleRequestError(order.id)}
+                                disabled={order.isSubmittingError || order.isOpeningCell || order.isClosingCell}
+                              >
+                                {order.isSubmittingError ? (language === "ru" ? "Отправка..." : "Sending...") : (language === "ru" ? "Сообщить об ошибке" : "Report error")}
+                              </Button>
+                            </div>
+                          </div>
+                        </TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
@@ -704,38 +848,42 @@ export function RecipientForm({
                 {t.recipient.confirmDelivery}
               </Button>
             )}
-
-          {/* Кнопки для delivery_type === "self" */}
-          {recipientOrderDetails && recipientOrderDetails.deliveryType === "self" && (
-            <>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={handleOpenCell}
-                disabled={!selectedRecipientId || recipientOrderDetails.isOpeningCell || recipientOrderDetails.isClosingCell || recipientOrderDetails.isRequestingError}
-              >
-                {recipientOrderDetails.isOpeningCell ? (language === "ru" ? "Открываю..." : "Opening...") : t.client.openCell}
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={handleCloseCell}
-                disabled={!selectedRecipientId || recipientOrderDetails.isClosingCell || recipientOrderDetails.isOpeningCell || recipientOrderDetails.isRequestingError}
-              >
-                {recipientOrderDetails.isClosingCell ? (language === "ru" ? "Закрываю..." : "Closing...") : t.client.closeCell}
-              </Button>
-              <Button
-                size="sm"
-                variant="destructive"
-                onClick={handleRequestError}
-                disabled={!selectedRecipientId || recipientOrderDetails.isRequestingError || recipientOrderDetails.isOpeningCell || recipientOrderDetails.isClosingCell}
-              >
-                {recipientOrderDetails.isRequestingError ? (language === "ru" ? "Отправка..." : "Sending...") : t.client.error}
-              </Button>
-            </>
-          )}
         </div>
       </CardContent>
+
+      {/* Модальное окно для сообщения об ошибке */}
+      <Dialog open={isErrorModalOpen} onOpenChange={setIsErrorModalOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{language === "ru" ? "Сообщить об ошибке" : "Report Error"}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label htmlFor="error-type">{language === "ru" ? "Тип ошибки" : "Error Type"}</Label>
+              <Select value={selectedErrorType} onValueChange={setSelectedErrorType}>
+                <SelectTrigger id="error-type">
+                  <SelectValue placeholder={language === "ru" ? "Выберите тип ошибки" : "Select error type"} />
+                </SelectTrigger>
+                <SelectContent>
+                  {recipientErrorTypes.map((errorType) => (
+                    <SelectItem key={errorType.value} value={errorType.value}>
+                      {errorType.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsErrorModalOpen(false)}>
+              {language === "ru" ? "Отмена" : "Cancel"}
+            </Button>
+            <Button onClick={handleSubmitError} disabled={!selectedErrorType}>
+              {language === "ru" ? "Отправить" : "Submit"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }
