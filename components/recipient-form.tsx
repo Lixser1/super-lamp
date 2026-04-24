@@ -52,7 +52,7 @@ export function RecipientForm({
     isClosingCell?: boolean;
     isRequestingError?: boolean;
   } | null>(null)
-  const [recipientLeg, setRecipientLeg] = useState<"pickup" | "delivery">("pickup")
+  const [recipientLeg, setRecipientLeg] = useState<"pickup" | "delivery">("delivery")
   const [pinDisplay, setPinDisplay] = useState<string | null>(null)
 
   const [recipientOrders, setRecipientOrders] = useState<any[]>([])
@@ -350,84 +350,6 @@ export function RecipientForm({
     }
   };
 
-  // Открыть ячейку
-  const handleOpenCell = async () => {
-    if (!recipientOrderDetails) return;
-
-    setRecipientOrderDetails(prev => prev ? { ...prev, isOpeningCell: true } : null);
-
-    const requestData = makeFsmEnqueueRequest({
-      entity_type: "order",
-      entity_id: recipientOrderDetails.id,
-      process_name: "open_cell",
-      user_id: parseInt(selectedRecipientId),
-      target_user_id: parseInt(selectedRecipientId),
-      user_role: "recipient",
-      metadata: {},
-    });
-
-    try {
-      const result = await enqueueFsmRequest(requestData);
-      addLog({
-        role: "recipient",
-        action: "open_cell",
-        order_id: recipientOrderDetails.id,
-        data: result,
-      });
-
-      // Извлекаем instance_id из data.instance_id
-      const instanceId = result?.data?.instance_id || result?.instance_id;
-      
-      // Если есть instance_id, подписываемся на SSE
-      if (instanceId) {
-        setCurrentInstanceId(instanceId);
-      }
-    } catch (error) {
-      console.error('Error opening cell:', error);
-    } finally {
-      setRecipientOrderDetails(prev => prev ? { ...prev, isOpeningCell: false } : null);
-    }
-  };
-
-  // Закрыть ячейку
-  const handleCloseCell = async () => {
-    if (!recipientOrderDetails) return;
-
-    setRecipientOrderDetails(prev => prev ? { ...prev, isClosingCell: true } : null);
-
-    const requestData = makeFsmEnqueueRequest({
-      entity_type: "order",
-      entity_id: recipientOrderDetails.id,
-      process_name: "close_cell",
-      user_id: parseInt(selectedRecipientId),
-      target_user_id: parseInt(selectedRecipientId),
-      user_role: "recipient",
-      metadata: {},
-    });
-
-    try {
-      const result = await enqueueFsmRequest(requestData);
-      addLog({
-        role: "recipient",
-        action: "close_cell",
-        order_id: recipientOrderDetails.id,
-        data: result,
-      });
-
-      // Извлекаем instance_id из data.instance_id
-      const instanceId = result?.data?.instance_id || result?.instance_id;
-      
-      // Если есть instance_id, подписываемся на SSE
-      if (instanceId) {
-        setCurrentInstanceId(instanceId);
-      }
-    } catch (error) {
-      console.error('Error closing cell:', error);
-    } finally {
-      setRecipientOrderDetails(prev => prev ? { ...prev, isClosingCell: false } : null);
-    }
-  };
-
   const updateRecipientOrderById = (orderId: number, patch: Partial<any>) => {
     setRecipientOrders(prev =>
       prev.map(order =>
@@ -670,67 +592,6 @@ export function RecipientForm({
             </div>
           )}
 
-          {recipientTracking.length > 0 ? (
-            <div>
-              <h3 className="font-semibold mb-3">{t.recipient.trackingHistory}</h3>
-              <div className="border rounded-lg overflow-hidden">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Статус</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {recipientTracking.map((track, idx) => (
-                      <TableRow key={idx}>
-                        <TableCell>
-                          {track.isCompleted ? (
-                            <Badge variant="default" className="bg-green-600">
-                              ✓ {track.status}
-                            </Badge>
-                          ) : track.isCurrent ? (
-                            <Badge variant="default" className="bg-blue-600">
-                              → {track.status} (текущий)
-                            </Badge>
-                          ) : (
-                            <Badge variant="outline">
-                              ○ {track.status}
-                            </Badge>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-
-              {recipientOrderDetails && (
-                <div className="mt-4 flex gap-2 items-center">
-                  <Button onClick={handleCreatePin}>
-                    {language === "ru" ? "Создать PIN" : "Create PIN"}
-                  </Button>
-                  <Button onClick={handleShowPin} variant="outline">
-                    {language === "ru" ? "Отобразить PIN" : "Show PIN"}
-                  </Button>
-                  {pinDisplay && (
-                    <div className="flex items-center gap-2">
-                      <span className="font-semibold">{language === "ru" ? "PIN:" : "PIN:"}</span>
-                      <Badge variant="default" className="text-lg px-3 py-1">
-                        {pinDisplay}
-                      </Badge>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          ) : (
-            recipientOrderId && (
-              <div className="text-sm text-muted-foreground p-4 bg-muted rounded-lg">
-                {t.recipient.noTracking}
-              </div>
-            )
-          )}
-
           {recipientOrders.length > 0 && (
             <div className="mb-4">
               <h3 className="font-semibold mb-3">{language === "ru" ? "Заказы получателя" : "Recipient Orders"}</h3>
@@ -766,14 +627,14 @@ export function RecipientForm({
                               <Button
                                 size="sm"
                                 onClick={() => handleRequestAccessCodeForOrder(order)}
-                                disabled={order.isRequestingCode || order.isGettingCode || order.isSubmittingError || order.isOpeningCell || order.isClosingCell}
+                                disabled={order.isRequestingCode || order.isGettingCode || order.isSubmittingError || order.isOpeningCell || order.isClosingCell || (order.delivery_type === 'courier' && order.status !== 'order_courier2_parcel_delivered') || (order.delivery_type === 'self' && order.status !== 'order_parcel_confirmed_post2')}
                               >
                                 {order.isRequestingCode ? (language === "ru" ? "Запрос..." : "Requesting...") : (language === "ru" ? "Запросить код" : "Request code")}
                               </Button>
                               <Button
                                 size="sm"
                                 onClick={() => handleGetOrderAccessCode(order)}
-                                disabled={order.isGettingCode || order.isRequestingCode || order.isSubmittingError || order.isOpeningCell || order.isClosingCell}
+                                disabled={order.isGettingCode || order.isRequestingCode || order.isSubmittingError || order.isOpeningCell || order.isClosingCell || (order.delivery_type === 'courier' && order.status !== 'order_courier2_parcel_delivered') || (order.delivery_type === 'self' && order.status !== 'order_parcel_confirmed_post2')}
                               >
                                 {order.isGettingCode ? (language === "ru" ? "Получаю..." : "Getting...") : (language === "ru" ? "Получить код" : "Get code")}
                               </Button>
@@ -788,7 +649,7 @@ export function RecipientForm({
                                 size="sm"
                                 variant="outline"
                                 onClick={() => handleOpenOrderCell(order)}
-                                disabled={order.isOpeningCell || order.isClosingCell || order.isSubmittingError || !order.pin}
+                                disabled={order.isOpeningCell || order.isClosingCell || order.isSubmittingError || order.delivery_type !== 'self' || (order.status !== 'order_parcel_confirmed_post2' && order.status !== 'order_delivered_to_client')}
                               >
                                 {order.isOpeningCell ? (language === "ru" ? "Открываю..." : "Opening...") : (language === "ru" ? "Открыть ячейку" : "Open cell")}
                               </Button>
@@ -796,7 +657,7 @@ export function RecipientForm({
                                 size="sm"
                                 variant="outline"
                                 onClick={() => handleCloseOrderCell(order)}
-                                disabled={order.isClosingCell || order.isOpeningCell || order.isSubmittingError}
+                                disabled={order.isClosingCell || order.isOpeningCell || order.isSubmittingError || order.delivery_type !== 'self' || order.status !== 'order_delivered_to_client'}
                               >
                                 {order.isClosingCell ? (language === "ru" ? "Закрываю..." : "Closing...") : (language === "ru" ? "Закрыть ячейку" : "Close cell")}
                               </Button>
