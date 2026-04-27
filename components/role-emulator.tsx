@@ -213,6 +213,17 @@ useEffect(() => {
   }
 }, [selectedCourierId, isTabActive, pollingInterval, lastFetchTime])
 
+// Сброс данных при смене курьера
+useEffect(() => {
+  if (selectedCourierId) {
+    console.log('[Courier changed] Resetting orders for courier:', selectedCourierId);
+    setAvailableOrders([]);
+    setAssignedOrders([]);
+    // Принудительно обновляем сразу
+    refreshCourierOrders();
+  }
+}, [selectedCourierId]);
+
 useEffect(() => {
   if (selectedClientId) {
     loadClientOrders();
@@ -382,15 +393,21 @@ const fetchAllOrders = async () => {
     // Получаем courier_id из мок-данных
     const courier = mockCouriers.find((c) => c.id === parseInt(selectedCourierId));
     if (!courier) {
-      throw new Error('Courier not found');
+      console.warn('Courier not found in mock data, using selectedCourierId directly:', selectedCourierId);
     }
 
     // Формируем URL с параметром courier_id
-    const response = await fetch(`/api/proxy/courier/exchange?courier_id=${courier.id}`);
-    if (!response.ok) throw new Error('Failed to fetch orders');
+    const courierId = courier?.id || parseInt(selectedCourierId);
+    console.log('[fetchAllOrders] Fetching for courier_id:', courierId, 'selectedCourierId:', selectedCourierId);
+    
+    const response = await fetch(`/api/proxy/courier/exchange?courier_id=${courierId}`);
+    if (!response.ok) {
+      console.error('[fetchAllOrders] Response not OK:', response.status);
+      throw new Error('Failed to fetch orders');
+    }
 
     const data = await response.json();
-    console.log("Fetched orders from backend:", data); // Лог для отладки
+    console.log('[fetchAllOrders] Backend response:', data);
     
     // Маппим поля для совместимости с UI
     const orders = (data.orders || []).map((order: any) => ({
@@ -402,6 +419,7 @@ const fetchAllOrders = async () => {
       size: order.cell_size,
     }));
     
+    console.log('[fetchAllOrders] Mapped orders:', orders.length);
     return { ...data, orders };
   } catch (error) {
     console.error('Error fetching orders:', error);
@@ -485,6 +503,8 @@ const refreshCourierOrders = async () => {
 
     // Сохраняем ВСЕ заказы без фильтрации
     setAvailableOrders(allOrders);
+
+    console.log('[refreshCourierOrders] Orders loaded:', allOrders.length, 'for courier:', selectedCourierId);
 
     // Логика для динамического изменения интервала опроса
     const duration = Date.now() - startTime;
@@ -1086,14 +1106,16 @@ const fetchUsers = async () => {
   }
 const filteredAvailableOrders = availableOrders.filter((o: any) => {
   if (ordersFilter === "in") {
-    // "в" - заказы на доставку (delivery) или новые заказы (order_created)
-    return o.type === "delivery" || o.status === "order_created";
+    // "в" - pickup заказы (на получение из постамата)
+    return o.type === "pickup";
   } else if (ordersFilter === "out") {
-    // "из" - заказы на выдачу (pickup), которые не order_created
-    return o.type === "pickup" && o.status !== "order_created";
+    // "из" - delivery заказы (на доставку в постамат)
+    return o.type === "delivery";
   }
   return false;
 });
+
+console.log('[filteredAvailableOrders] Filter:', ordersFilter, 'Total:', availableOrders.length, 'Filtered:', filteredAvailableOrders.length);
 
 
   const fetchDriverExchangeOrders = async (city: string) => {

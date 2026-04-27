@@ -38,6 +38,12 @@ export function OperatorForm({
   const [loadingUsers, setLoadingUsers] = useState(false)
   const [operatorId, setOperatorId] = useState<number | null>(null)
 
+  // Polling состояния
+  const [pollingInterval, setPollingInterval] = useState(5000)
+  const [isTabActive, setIsTabActive] = useState(true)
+  const lockersIntervalRef = useRef<NodeJS.Timeout | null>(null)
+  const tripsIntervalRef = useRef<NodeJS.Timeout | null>(null)
+
   // Состояния для работы с ячейками и пинами
   const [orderCellStates, setOrderCellStates] = useState<{
     [key: number]: {
@@ -136,7 +142,7 @@ export function OperatorForm({
     loadOperatorTrips()
   }, [])
 
-  // Загрузка локеров оператора
+  // Загрузка локеров оператора при монтировании компонента
   useEffect(() => {
     const loadOperatorLockers = async () => {
       setLoadingLockers(true)
@@ -175,6 +181,64 @@ export function OperatorForm({
 
     loadUsers()
   }, [])
+
+  // Очистка polling при размонтировании
+  useEffect(() => {
+    return () => {
+      if (lockersIntervalRef.current) clearInterval(lockersIntervalRef.current)
+      if (tripsIntervalRef.current) clearInterval(tripsIntervalRef.current)
+    }
+  }, [])
+
+  // Отслеживание видимости вкладки
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      setIsTabActive(!document.hidden)
+    }
+    
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
+  }, [])
+
+  // Polling для локеров
+  useEffect(() => {
+    if (!isTabActive) return
+
+    const doPollLockers = async () => {
+      try {
+        const lockersData = await fetchOperatorLockers()
+        setLockers(lockersData)
+      } catch (error) {
+        console.error('Error polling lockers:', error)
+      }
+    }
+
+    lockersIntervalRef.current = setInterval(doPollLockers, pollingInterval)
+
+    return () => {
+      if (lockersIntervalRef.current) clearInterval(lockersIntervalRef.current)
+    }
+  }, [isTabActive, pollingInterval])
+
+  // Polling для рейсов
+  useEffect(() => {
+    if (!isTabActive) return
+
+    const doPollTrips = async () => {
+      try {
+        const trips = await fetchOperatorTrips()
+        setOperatorTrips(trips)
+      } catch (error) {
+        console.error('Error polling trips:', error)
+      }
+    }
+
+    tripsIntervalRef.current = setInterval(doPollTrips, pollingInterval)
+
+    return () => {
+      if (tripsIntervalRef.current) clearInterval(tripsIntervalRef.current)
+    }
+  }, [isTabActive, pollingInterval])
 
   // Эффект для подписки на SSE события
   useEffect(() => {

@@ -10,6 +10,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { fetchAccessCodeView, startDriverTrip, fetchDriverReservations, fetchDriverTripData, fetchOperatorTrips, fetchActiveDriverTrips, enqueueFsmRequest, makeFsmEnqueueRequest, subscribeToFsmInstanceEvents } from "@/lib/api";
 import { performCellOperation } from "@/lib/utils";
+import { getLegFromStatus } from "@/lib/cell-operations";
 import { SSEErrorTracker } from "@/components/sse-error-tracker";
 
 
@@ -308,7 +309,13 @@ export function DriverForm({
     }));
 
     try {
-      const result = await performCellOperation(orderId, parseInt(selectedDriverId), "request_locker_access_code", { leg: "pickup" }, "driver", { targetRole: "driver", leg: "pickup" });
+      // Определяем leg на основе статуса заказа
+      const order = loadingOrders.find(o => o.order_id === orderId) || 
+                    directOrders.find(o => o.order_id === orderId);
+      const status = order?.status || '';
+      const leg = getLegFromStatus(status);
+      
+      const result = await performCellOperation(orderId, parseInt(selectedDriverId), "request_locker_access_code", { leg }, "driver", { targetRole: "driver", leg });
       const instanceId = result?.data?.instance_id || result?.instance_id;
       if (instanceId) {
         setCurrentInstanceId(instanceId);
@@ -330,7 +337,13 @@ export function DriverForm({
     }));
 
     try {
-      const result = await fetchAccessCodeView(orderId, "pickup", parseInt(selectedDriverId));
+      // Определяем leg на основе статуса заказа
+      const order = loadingOrders.find(o => o.order_id === orderId) || 
+                    directOrders.find(o => o.order_id === orderId);
+      const status = order?.status || '';
+      const leg = getLegFromStatus(status);
+      
+      const result = await fetchAccessCodeView(orderId, leg, parseInt(selectedDriverId));
       console.log('fetchAccessCodeView result:', result);
       setOrderStates(prev => ({
         ...prev,
@@ -352,11 +365,17 @@ export function DriverForm({
  }));
 
  try {
- const result = await performCellOperation(cellId, parseInt(selectedDriverId), "open_cell", { pin: pins[orderId] }, "driver", { targetRole: "driver", leg: "pickup" });
- const instanceId = result?.data?.instance_id || result?.instance_id;
- if (instanceId) {
-   setCurrentInstanceId(instanceId);
- }
+   // Определяем leg на основе статуса заказа
+   const order = loadingOrders.find(o => o.order_id === orderId) || 
+                 directOrders.find(o => o.order_id === orderId);
+   const status = order?.status || '';
+   const leg = getLegFromStatus(status);
+   
+   const result = await performCellOperation(cellId, parseInt(selectedDriverId), "open_cell", { pin: pins[orderId], leg }, "driver", { targetRole: "driver", leg });
+   const instanceId = result?.data?.instance_id || result?.instance_id;
+   if (instanceId) {
+     setCurrentInstanceId(instanceId);
+   }
  } catch (error) {
  console.error('Error opening cell:', error);
  } finally {
@@ -374,11 +393,17 @@ export function DriverForm({
  }));
 
  try {
- const result = await performCellOperation(cellId, parseInt(selectedDriverId), "close_cell", { leg: "pickup" }, "driver", { targetRole: "driver", leg: "pickup" });
- const instanceId = result?.data?.instance_id || result?.instance_id;
- if (instanceId) {
-   setCurrentInstanceId(instanceId);
- }
+   // Определяем leg на основе статуса заказа
+   const order = loadingOrders.find(o => o.order_id === orderId) || 
+                 directOrders.find(o => o.order_id === orderId);
+   const status = order?.status || '';
+   const leg = getLegFromStatus(status);
+   
+   const result = await performCellOperation(cellId, parseInt(selectedDriverId), "close_cell", { leg }, "driver", { targetRole: "driver", leg });
+   const instanceId = result?.data?.instance_id || result?.instance_id;
+   if (instanceId) {
+     setCurrentInstanceId(instanceId);
+   }
  } catch (error) {
  console.error('Error closing cell:', error);
  } finally {
@@ -396,11 +421,17 @@ export function DriverForm({
  }));
 
  try {
- const result = await performCellOperation(cellId, parseInt(selectedDriverId), "request_locker_access_code", { leg: "pickup" }, "driver", { targetRole: "driver", leg: "pickup" });
- const instanceId = result?.data?.instance_id || result?.instance_id;
- if (instanceId) {
-   setCurrentInstanceId(instanceId);
- }
+   // Определяем leg на основе статуса заказа
+   const order = loadingOrders.find(o => o.order_id === orderId) || 
+                 directOrders.find(o => o.order_id === orderId);
+   const status = order?.status || '';
+   const leg = getLegFromStatus(status);
+   
+   const result = await performCellOperation(cellId, parseInt(selectedDriverId), "request_locker_access_code", { leg }, "driver", { targetRole: "driver", leg });
+   const instanceId = result?.data?.instance_id || result?.instance_id;
+   if (instanceId) {
+     setCurrentInstanceId(instanceId);
+   }
  } catch (error) {
  console.error('Error requesting error:', error);
  } finally {
