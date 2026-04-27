@@ -14,6 +14,7 @@ import { FSMEmulator } from "@/components/fsm-emulator"
 import { useLanguage } from "@/lib/language-context"
 import { enqueueFsmRequest, fetchOrderTrack, makeFsmEnqueueRequest, fetchOrdersByClient, startDriverLoading, fetchDriverReservations, subscribeToFsmInstanceEvents } from "@/lib/api"
 import { SSEErrorTracker } from "@/components/sse-error-tracker"
+import { getAssignExecutorProcessAndLeg } from "@/lib/cell-operations"
 import {
   mockLockers,
   mockOrders,
@@ -586,12 +587,24 @@ useEffect(() => {
   const handleTakeOrder = async (orderId: number) => {
   setCourierMessage(null);
 
+  // Получаем заказ чтобы узнать его статус
+  const order = availableOrders.find((o: any) => o.id === orderId) || 
+                 assignedOrders.find((o: any) => o.id === orderId);
+  const status = order?.status || '';
+  
+  // Определяем leg на основе статуса используя helper функцию:
+  // - "order_parcel_confirmed_post2" для postamatu2 -> "delivery"
+  // - "order_created" для postamatu1 -> "pickup"
+  const { leg } = getAssignExecutorProcessAndLeg(status);
+
   const requestData = makeFsmEnqueueRequest({
     entity_type: "order",
     entity_id: orderId,
-    process_name: "order_assign_courier1", // Исправлено на нужный процесс
+    process_name: "assign_executor",
     user_id: parseInt(selectedCourierId),
-    target_user_id: parseInt(selectedCourierId), // Оба ID совпадают
+    target_user_id: parseInt(selectedCourierId),
+    target_role: "courier",
+    metadata: { leg },
   });
 
   try {

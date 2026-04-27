@@ -9,9 +9,9 @@ import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { useLanguage } from "@/lib/language-context"
 import { mockDriverExchangeOrders, mockDriverAssignedOrders } from "@/lib/mock-data"
-import { fetchOperatorTrips, fetchOperatorLockers, fetchUsers, enqueueFsmRequest, makeFsmEnqueueRequest, fetchAccessCodeView, subscribeToFsmInstanceEvents, fetchFsmUserErrorsFiltered } from "@/lib/api"
+import { fetchOperatorTrips, fetchOperatorLockers, fetchUsers, enqueueFsmRequest, fetchAccessCodeView, subscribeToFsmInstanceEvents, fetchFsmUserErrorsFiltered, createAssignExecutorRequest, createRemoveExecutorRequest } from "@/lib/api"
 import { performCellOperation } from "@/lib/utils"
-import { getLegFromStatus } from "@/lib/cell-operations"
+import { getLegFromStatus, getAssignExecutorProcessAndLeg, getRemoveExecutorProcessAndLeg } from "@/lib/cell-operations"
 import { SSEErrorTracker } from "@/components/sse-error-tracker"
 
 interface OperatorFormProps {
@@ -238,14 +238,17 @@ export function OperatorForm({
       const trip = operatorTrips.find(t => t.trip_id === tripId)
       const driverUserId = trip?.driver_user_id
       
-      const result = await sendFsmRequest({
-        entityType: 'trip',
-        entityId: tripId,
-        processName: 'trip_remove_driver',
-        targetUserId: driverUserId,
-        targetRole: 'driver',
+      // Для снятия водителя используем remove_executor (для trip metadata пустой)
+      const request = createRemoveExecutorRequest({
+        entity_type: 'trip',
+        entity_id: tripId,
+        user_id: operatorId!,
+        target_user_id: driverUserId!,
+        target_role: 'driver'
       })
 
+      const result = await enqueueFsmRequest(request)
+      
       // Извлекаем instance_id из ответа
       const instanceId = result?.data?.instance_id || result?.instance_id;
       
@@ -263,7 +266,7 @@ export function OperatorForm({
       setSseLastError(errorMessage)
     }
   }
-
+      
   const toggleLocker = (lockerId: number) => {
     if (expandedLockers.includes(lockerId)) {
       setExpandedLockers(expandedLockers.filter((id) => id !== lockerId))
@@ -275,13 +278,23 @@ export function OperatorForm({
   const handleAssignCourier = async (orderId: number, lockerId: number) => {
     const courierId = selectedCouriers[orderId]
     if (courierId) {
-      const request = makeFsmEnqueueRequest({
+      // Получаем информацию о заказе чтобы узнать его статус
+      const locker = lockers.find(l => l.locker_id === lockerId)
+      const order = locker?.orders?.find((o: any) => o.order_id === orderId)
+      const status = order?.status || ''
+      
+      // Определяем process_name и leg на основе статуса:
+      // - "order_parcel_confirmed_post2" для postamatu2 -> "delivery"
+      // - "order_created" для postamatu1 -> "pickup"
+      const { leg } = getAssignExecutorProcessAndLeg(status)
+
+      const request = createAssignExecutorRequest({
         entity_type: 'order',
         entity_id: orderId,
-        process_name: 'order_assign_courier1',
         user_id: operatorId!,
         target_user_id: parseInt(courierId),
         target_role: 'courier',
+        leg
       })
 
       try {
@@ -312,14 +325,17 @@ export function OperatorForm({
   const handleAssignDriver = async (tripId: number) => {
     const driverId = selectedDrivers[tripId]
     if (driverId) {
+      // Для назначения водителя используем assign_executor (для trip metadata пустой)
+      const request = createAssignExecutorRequest({
+        entity_type: 'trip',
+        entity_id: tripId,
+        user_id: operatorId!,
+        target_user_id: Number(driverId),
+        target_role: 'driver'
+      })
+
       try {
-        const result = await sendFsmRequest({
-          entityType: 'trip',
-          entityId: tripId,
-          processName: 'trip_assign_driver',
-          targetUserId: Number(driverId),
-          targetRole: 'driver',
-        })
+        const result = await enqueueFsmRequest(request)
         
         // Извлекаем instance_id и подписываемся на SSE
         const instanceId = result?.data?.instance_id || result?.instance_id;
@@ -346,26 +362,22 @@ export function OperatorForm({
     const courierId = order.delivery_courier_id
     const status = order.status
     
-    // Статусы для order_remove_courier2
-    const courier2Statuses = [
-      'order_in_transit_to_post2',
-      'order_courier2_assigned',
-      'order_parcel_confirmed_post2',
-      'order_courier2_parcel_delivered'
-    ]
+    // Определяем process_name и leg на основе статуса заказа:
+    // - "order_courier2_assigned" для postamatu2 -> "delivery"
+    // - "order_courier1_assigned" для postamatu1 -> "pickup"
+    const { process_name, leg } = getRemoveExecutorProcessAndLeg(status)
     
-    const processName = courier2Statuses.includes(status) 
-      ? 'order_remove_courier2' 
-      : 'order_remove_courier1'
+    const request = createRemoveExecutorRequest({
+      entity_type: 'order',
+      entity_id: orderId,
+      user_id: operatorId!,
+      target_user_id: courierId,
+      target_role: 'courier',
+      leg
+    })
     
     try {
-      const result = await sendFsmRequest({
-        entityType: 'order',
-        entityId: orderId,
-        processName: processName,
-        targetUserId: courierId,
-        targetRole: 'courier',
-      })
+      const result = await enqueueFsmRequest(request)
       
       // Извлекаем instance_id из ответа
       const instanceId = result?.data?.instance_id || result?.instance_id;
@@ -390,33 +402,6 @@ export function OperatorForm({
       driverAssignedOrders.map((order) => (order.tripId === tripId ? { ...order, driverId: null } : order)),
     )
     handleAction("operator", "remove_driver", { trip_id: tripId })
-  }
-
-  // Переиспользуемая функция для FSM запросов
-  const sendFsmRequest = async (params: {
-    entityType: 'order' | 'trip'
-    entityId: number
-    processName: 'order_remove_courier1' | 'order_remove_courier2' | 'trip_remove_driver' | 'trip_assign_driver'
-    targetUserId?: number
-    targetRole: 'driver' | 'courier'
-    metadata?: Record<string, unknown>
-  }) => {
-    if (!operatorId) {
-      console.error('Operator ID not found')
-      return
-    }
-
-    const request = makeFsmEnqueueRequest({
-      entity_type: params.entityType,
-      entity_id: params.entityId,
-      process_name: params.processName,
-      user_id: operatorId,
-      target_user_id: params.targetUserId,
-      target_role: params.targetRole,
-      metadata: params.metadata,
-    })
-
-    return enqueueFsmRequest(request)
   }
 
   // Функции для работы с ячейками заказов в постаматах

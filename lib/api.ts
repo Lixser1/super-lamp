@@ -207,6 +207,25 @@ export type FsmEnqueueRequest = {
   metadata?: Record<string, unknown>
 }
 
+// Типы для операций с исполнителями
+export type AssignExecutorRequest = {
+  entity_type: 'order' | 'trip'
+  entity_id: number
+  user_id: number
+  target_user_id: number
+  target_role: 'courier' | 'driver'
+  leg?: 'pickup' | 'delivery' // Опционально для trip
+}
+
+export type RemoveExecutorRequest = {
+  entity_type: 'order' | 'trip'
+  entity_id: number
+  user_id: number
+  target_user_id: number
+  target_role: 'courier' | 'driver'
+  leg?: 'pickup' | 'delivery' // Опционально для trip
+}
+
 export function makeFsmEnqueueRequest(
   params: {
     entity_type: FsmEnqueueRequest['entity_type']
@@ -586,5 +605,41 @@ export function subscribeToFsmInstanceEvents(
       eventSource.close();
     }
   };
+}
+
+// Функции для назначения и снятия исполнителей через единый процесс
+
+/**
+ * Создает запрос на назначение исполнителя (курьера/водителя) через процесс assign_executor
+ */
+export function createAssignExecutorRequest(
+  params: AssignExecutorRequest
+): FsmEnqueueRequest {
+  return {
+    entity_type: params.entity_type,
+    entity_id: params.entity_id,
+    process_name: 'assign_executor',
+    user_id: params.user_id,
+    target_user_id: params.target_user_id,
+    target_role: params.target_role,
+    metadata: params.leg ? { leg: params.leg } : {},
+  }
+}
+
+/**
+ * Создает запрос на снятие исполнителя (курьера/водителя) через процесс remove_executor
+ */
+export function createRemoveExecutorRequest(
+  params: RemoveExecutorRequest
+): FsmEnqueueRequest {
+  return {
+    entity_type: params.entity_type,
+    entity_id: params.entity_id,
+    process_name: 'remove_executor',
+    user_id: params.user_id,
+    target_user_id: params.target_user_id,
+    target_role: params.target_role,
+    metadata: params.leg ? { leg: params.leg } : {},
+  }
 }
 
