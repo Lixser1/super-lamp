@@ -358,7 +358,7 @@ export function DriverForm({
     }
   };
 
- const handleOpenCell = async (orderId: number, cellId: number) => {
+ const handleOpenCell = async (orderId: number, sourceCellId: number) => {
  setOrderStates(prev => ({
  ...prev,
  [orderId]: { ...prev[orderId], isOpeningCell: true }
@@ -371,7 +371,8 @@ export function DriverForm({
    const status = order?.status || '';
    const leg = getLegFromStatus(status);
    
-   const result = await performCellOperation(cellId, parseInt(selectedDriverId), "open_cell", { pin: pins[orderId], leg }, "driver", { targetRole: "driver", leg });
+   // Для open_cell передаем source_cell_id как entity_id
+   const result = await performCellOperation(sourceCellId, parseInt(selectedDriverId), "open_cell", { pin: pins[orderId], leg }, "driver", { targetRole: "driver", leg, entityType: "locker" });
    const instanceId = result?.data?.instance_id || result?.instance_id;
    if (instanceId) {
      setCurrentInstanceId(instanceId);
@@ -386,7 +387,7 @@ export function DriverForm({
  }
  };
 
- const handleCloseCell = async (orderId: number, cellId: number) => {
+ const handleCloseCell = async (orderId: number, destCellId: number) => {
  setOrderStates(prev => ({
  ...prev,
  [orderId]: { ...prev[orderId], isClosingCell: true }
@@ -399,7 +400,8 @@ export function DriverForm({
    const status = order?.status || '';
    const leg = getLegFromStatus(status);
    
-   const result = await performCellOperation(cellId, parseInt(selectedDriverId), "close_cell", { leg }, "driver", { targetRole: "driver", leg });
+   // Для close_cell передаем dest_cell_id как entity_id
+   const result = await performCellOperation(destCellId, parseInt(selectedDriverId), "close_cell", { leg }, "driver", { targetRole: "driver", leg, entityType: "locker" });
    const instanceId = result?.data?.instance_id || result?.instance_id;
    if (instanceId) {
      setCurrentInstanceId(instanceId);
@@ -414,7 +416,7 @@ export function DriverForm({
  }
  };
 
- const handleRequestError = async (orderId: number, cellId: number) => {
+ const handleRequestError = async (orderId: number, sourceCellId: number) => {
  setOrderStates(prev => ({
  ...prev,
  [orderId]: { ...prev[orderId], isRequestingError: true }
@@ -427,7 +429,7 @@ export function DriverForm({
    const status = order?.status || '';
    const leg = getLegFromStatus(status);
    
-   const result = await performCellOperation(cellId, parseInt(selectedDriverId), "request_locker_access_code", { leg }, "driver", { targetRole: "driver", leg });
+   const result = await performCellOperation(sourceCellId, parseInt(selectedDriverId), "request_locker_access_code", { leg }, "driver", { targetRole: "driver", leg, entityType: "locker" });
    const instanceId = result?.data?.instance_id || result?.instance_id;
    if (instanceId) {
      setCurrentInstanceId(instanceId);
@@ -442,7 +444,49 @@ export function DriverForm({
  }
  };
 
- const handleStartTrip = async (tripId?: number) => {
+  const handleCompleteTrip = async () => {
+    if (!selectedDriverId || !selectedTripId) return;
+    
+    try {
+      const requestData = makeFsmEnqueueRequest({
+        entity_type: "trip",
+        entity_id: selectedTripId,
+        process_name: "complete_trip",
+        user_id: parseInt(selectedDriverId),
+        target_user_id: parseInt(selectedDriverId),
+        target_role: "driver",
+        metadata: {},
+      });
+
+      const result = await enqueueFsmRequest(requestData);
+      console.log('[complete_trip] Result:', result);
+      
+      const instanceId = result?.data?.instance_id || result?.instance_id;
+      if (instanceId) {
+        setCurrentInstanceId(instanceId);
+      }
+      
+      // Очищаем данные после успешного завершения рейса
+      setDirectOrders([]);
+      setReverseOrders([]);
+      setTripData(null);
+      setTripId(null);
+      setTripState("at_from_locker");
+      setSelectedTripId(null);
+      setActiveTrips([]);
+      setTakenDirectOrders([]);
+      setSelectedDirectOrders([]);
+      setTakenReverseOrders([]);
+      setSelectedReverseOrders([]);
+      setPlacedParcels({});
+    } catch (error: any) {
+      console.error('Error completing trip:', error);
+      const errorMessage = error?.response?.data?.message || error?.message || (language === "ru" ? "Ошибка завершения рейса" : "Error completing trip");
+      setSseLastError(errorMessage);
+    }
+  };
+
+  const handleStartTrip = async (tripId?: number) => {
  if (!selectedDriverId || !tripId) return;
  try {
  const result = await performCellOperation(
@@ -827,22 +871,22 @@ export function DriverForm({
  >
  {orderStates[order.order_id]?.isOpeningCell ? (language === "ru" ? "Открываю..." : "Opening...") : t.client.openCell}
 </Button>
-<Button
- size="sm"
- variant="outline"
- onClick={() => handleCloseCell(order.order_id, order.source_cell_id)}
- disabled={!selectedDriverId || orderStates[order.order_id]?.isClosingCell || orderStates[order.order_id]?.isOpeningCell || orderStates[order.order_id]?.isRequestingError}
- >
- {orderStates[order.order_id]?.isClosingCell ? (language === "ru" ? "Закрываю..." : "Closing...") : t.client.closeCell}
-</Button>
-<Button
- size="sm"
- variant="destructive"
- onClick={() => handleRequestError(order.order_id, order.source_cell_id)}
- disabled={!selectedDriverId || orderStates[order.order_id]?.isRequestingError || orderStates[order.order_id]?.isOpeningCell || orderStates[order.order_id]?.isClosingCell}
- >
-                              {orderStates[order.order_id]?.isRequestingError ? (language === "ru" ? "Отправка..." : "Sending...") : t.client.error}
-                            </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => handleCloseCell(order.order_id, order.dest_cell_id)}
+                                    disabled={!selectedDriverId || orderStates[order.order_id]?.isClosingCell || orderStates[order.order_id]?.isOpeningCell || orderStates[order.order_id]?.isRequestingError}
+                                  >
+                                    {orderStates[order.order_id]?.isClosingCell ? (language === "ru" ? "Закрываю..." : "Closing...") : t.client.closeCell}
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="destructive"
+                                    onClick={() => handleRequestError(order.order_id, order.source_cell_id)}
+                                    disabled={!selectedDriverId || orderStates[order.order_id]?.isRequestingError || orderStates[order.order_id]?.isOpeningCell || orderStates[order.order_id]?.isClosingCell}
+                                  >
+                                    {orderStates[order.order_id]?.isRequestingError ? (language === "ru" ? "Отправка..." : "Sending...") : t.client.error}
+                                  </Button>
                           </div>
                         </div>
                       </TableCell>
@@ -898,6 +942,7 @@ export function DriverForm({
                       {activeTrips.find(t => t.id === selectedTripId)?.orders?.length || 0} {language === "ru" ? "заказов" : "orders"}
                     </span>
                   </div>
+                  
                 </div>
               )}
 
@@ -985,7 +1030,7 @@ export function DriverForm({
                                   <Button
                                     size="sm"
                                     variant="outline"
-                                    onClick={() => handleCloseCell(order.order_id, order.source_cell_id)}
+                                    onClick={() => handleCloseCell(order.order_id, order.dest_cell_id)}
                                     disabled={!selectedDriverId || orderStates[order.order_id]?.isClosingCell || orderStates[order.order_id]?.isOpeningCell || orderStates[order.order_id]?.isRequestingError}
                                   >
                                     {orderStates[order.order_id]?.isClosingCell ? (language === "ru" ? "Закрываю..." : "Closing...") : t.client.closeCell}
@@ -1030,15 +1075,14 @@ export function DriverForm({
                   >
                     {t.driver.startTrip}
                   </Button>
-                  {tripState === "in_transit" && (
                     <Button
                       size="sm"
-                      onClick={() => handleStartTrip(tripData?.trip_id)}
+                      onClick={handleCompleteTrip}
                       disabled={!selectedDriverId}
                     >
                       {t.driver.completeTrip || "Завершение рейса"}
                     </Button>
-                  )}
+                  
                 </div>
               </div>
 

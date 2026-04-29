@@ -324,10 +324,20 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
         role: "client",
         action: "request_access_code",
         data: result,
-      });      const instanceId = result?.data?.instance_id || result?.instance_id;
+      });
+      const instanceId = result?.data?.instance_id || result?.instance_id;
       if (instanceId) {
         setCurrentInstanceId(instanceId);
-      }    } catch (error) {
+      }
+      // Сохраняем PIN из ответа, если он есть
+      if (result?.pin) {
+        setClientOrders(prev =>
+          prev.map(order =>
+            order.id === orderId ? { ...order, pin: result.pin } : order
+          )
+        );
+      }
+    } catch (error) {
       console.error('Error requesting access code:', error);
     } finally {
       setClientOrders(prev =>
@@ -347,9 +357,20 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
 
     try {
       const result = await fetchAccessCodeView(orderId, "pickup", parseInt(selectedClientId));
+      console.log('[handleGetAccessCode] Result:', result);
+      
+      // PIN может быть в result.pin или result.data.pin
+      const pin = result?.pin || result?.data?.pin;
+      const code = result?.code || result?.data?.code;
+      
       setClientOrders(prev =>
         prev.map(order =>
-          order.id === orderId ? { ...order, accessCode: result.code, isGettingCode: false } : order
+          order.id === orderId ? { 
+            ...order, 
+            accessCode: code,
+            pin: pin,
+            isGettingCode: false 
+          } : order
         )
       );
     } catch (error) {
@@ -683,6 +704,12 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
                               >
                                 {order.isGettingCode ? (language === "ru" ? "Получаю..." : "Getting...") : (language === "ru" ? "Получить код" : "Get code")}
                               </Button>
+                              {order.pin && !order.isGettingCode && (
+                                <div className="text-xs mt-1">
+                                  <span className="font-medium">{language === "ru" ? "PIN: " : "PIN: "}</span>
+                                  <span className="text-primary font-mono">{order.pin}</span>
+                                </div>
+                              )}
                               <Input
                                 type="text"
                                 placeholder={language === "ru" ? "Введите PIN" : "Enter PIN"}
