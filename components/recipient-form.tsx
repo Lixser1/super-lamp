@@ -9,7 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { enqueueFsmRequest, fetchAccessCodeView, fetchOrderTrack, fetchOrdersByRecipient, makeFsmEnqueueRequest, subscribeToFsmInstanceEvents } from "@/lib/api";
 import { performCellOperation } from "@/lib/utils";
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import { getLegFromStatus } from "@/lib/cell-operations";
 import { SSEErrorTracker } from "@/components/sse-error-tracker";
 import { useLanguage } from "@/lib/language-context";
@@ -86,7 +86,7 @@ export function RecipientForm({
     { value: "other", label: language === "ru" ? "Другая ошибка" : "Other" },
   ]
 
-  const loadRecipientOrders = async (recipientId: string) => {
+  const loadRecipientOrders = useCallback(async (recipientId: string) => {
     if (!recipientId) {
       setRecipientOrders([])
       return
@@ -105,18 +105,24 @@ export function RecipientForm({
       const startTime = Date.now()
 
       const orders = await fetchOrdersByRecipient(recipientId)
-      const normalized = orders.map((order: any) => ({
-        ...order,
-        pin: "",
-        accessCode: undefined,
-        isRequestingCode: false,
-        isGettingCode: false,
-        isOpeningCell: false,
-        isClosingCell: false,
-        isSubmittingError: false,
-        fsmError: null,
-      }))
-      setRecipientOrders(normalized)
+      // Сохраняем существующие pin и accessCode при перезагрузке через functional update
+      setRecipientOrders(prevOrders => {
+        const normalized = orders.map((order: any) => {
+          const existingOrder = prevOrders.find(o => o.id === order.id)
+          return {
+            ...order,
+            pin: existingOrder?.pin || order.pin || "",
+            accessCode: existingOrder?.accessCode || order.accessCode || undefined,
+            isRequestingCode: false,
+            isGettingCode: false,
+            isOpeningCell: false,
+            isClosingCell: false,
+            isSubmittingError: false,
+            fsmError: null,
+          }
+        })
+        return normalized
+      })
 
       const duration = Date.now() - startTime
 
@@ -133,7 +139,7 @@ export function RecipientForm({
     } finally {
       setIsLoadingRecipientOrders(false)
     }
-  }
+  }, [lastFetchTime, pollingInterval]);
 
   const handleRecipientLookup = async () => {
     const orderIdToLookup = recipientOrderId
@@ -195,7 +201,7 @@ export function RecipientForm({
     } else {
       setRecipientOrders([])
     }
-  }, [selectedRecipientId])
+  }, [selectedRecipientId, loadRecipientOrders]);
 
   // Полинг для заказов получателя
   useEffect(() => {
@@ -221,7 +227,7 @@ export function RecipientForm({
     return () => {
       if (recipientIntervalRef.current) clearInterval(recipientIntervalRef.current);
     };
-  }, [selectedRecipientId, isTabActive, pollingInterval, lastFetchTime]);
+  }, [selectedRecipientId, isTabActive, pollingInterval, loadRecipientOrders]);
 
   // Отслеживание активности вкладки
   useEffect(() => {
@@ -390,7 +396,13 @@ export function RecipientForm({
     try {
       const leg = getLegFromStatus(order.status);
       const result = await fetchAccessCodeView(order.id, leg, parseInt(selectedRecipientId));
-      updateRecipientOrderById(order.id, { accessCode: result.code || result.pin, isGettingCode: false });
+      const pin = result?.pin || result?.data?.pin;
+      const code = result?.code || result?.data?.code;
+      updateRecipientOrderById(order.id, { 
+        accessCode: code || order.accessCode,
+        pin: pin || order.pin,
+        isGettingCode: false 
+      });
     } catch (error) {
       console.error('Error getting access code for order:', error);
       updateRecipientOrderById(order.id, { isGettingCode: false });
@@ -638,6 +650,12 @@ export function RecipientForm({
                               >
                                 {order.isGettingCode ? (language === "ru" ? "Получаю..." : "Getting...") : (language === "ru" ? "Получить код" : "Get code")}
                               </Button>
+                              {order.pin && !order.isGettingCode && (
+                                <div className="text-xs mt-1">
+                                  <span className="font-medium">{language === "ru" ? "PIN: " : "PIN: "}</span>
+                                  <span className="text-primary font-mono">{order.pin}</span>
+                                </div>
+                              )}
                               <Input
                                 type="text"
                                 placeholder={language === "ru" ? "Введите PIN" : "Enter PIN"}
@@ -649,7 +667,7 @@ export function RecipientForm({
                                 size="sm"
                                 variant="outline"
                                 onClick={() => handleOpenOrderCell(order)}
-                                disabled={order.isOpeningCell || order.isClosingCell || order.isSubmittingError || order.delivery_type !== 'self' || (order.status !== 'order_parcel_confirmed_post2' && order.status !== 'order_delivered_to_client')}
+                                disabled={order.isOpeningCell || order.isClosingCell || order.isSubmittingError || order.delivery_type == 'self' || (order.status == 'order_parcel_confirmed_post2' && order.status == 'order_delivered_to_client') || !order.pin}
                               >
                                 {order.isOpeningCell ? (language === "ru" ? "Открываю..." : "Opening...") : (language === "ru" ? "Открыть ячейку" : "Open cell")}
                               </Button>

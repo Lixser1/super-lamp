@@ -387,7 +387,7 @@ export function DriverForm({
  }
  };
 
- const handleCloseCell = async (orderId: number, destCellId: number) => {
+ const handleCloseCell = async (orderId: number, sourceCellId: number) => {
  setOrderStates(prev => ({
  ...prev,
  [orderId]: { ...prev[orderId], isClosingCell: true }
@@ -400,8 +400,8 @@ export function DriverForm({
    const status = order?.status || '';
    const leg = getLegFromStatus(status);
    
-   // Для close_cell передаем dest_cell_id как entity_id
-   const result = await performCellOperation(destCellId, parseInt(selectedDriverId), "close_cell", { leg }, "driver", { targetRole: "driver", leg, entityType: "locker" });
+   // Для close_cell передаем source_cell_id как entity_id (та же ячейка, что и для open_cell)
+   const result = await performCellOperation(sourceCellId, parseInt(selectedDriverId), "close_cell", { leg }, "driver", { targetRole: "driver", leg, entityType: "locker" });
    const instanceId = result?.data?.instance_id || result?.instance_id;
    if (instanceId) {
      setCurrentInstanceId(instanceId);
@@ -863,14 +863,14 @@ export function DriverForm({
                             >
                               {orderStates[order.order_id]?.isGettingCode ? (language === "ru" ? "Получаю..." : "Getting...") : (language === "ru" ? "Получить код" : "Get code")}
                             </Button>
-<Button
- size="sm"
- variant="outline"
- onClick={() => handleOpenCell(order.order_id, order.source_cell_id)}
- disabled={!selectedDriverId || orderStates[order.order_id]?.isOpeningCell || orderStates[order.order_id]?.isClosingCell || orderStates[order.order_id]?.isRequestingError || !pins[order.order_id]}
- >
- {orderStates[order.order_id]?.isOpeningCell ? (language === "ru" ? "Открываю..." : "Opening...") : t.client.openCell}
-</Button>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => handleOpenCell(order.order_id, order.dest_cell_id)}
+                                    disabled={!selectedDriverId || orderStates[order.order_id]?.isOpeningCell || orderStates[order.order_id]?.isClosingCell || orderStates[order.order_id]?.isRequestingError || !pins[order.order_id]}
+                                  >
+                                    {orderStates[order.order_id]?.isOpeningCell ? (language === "ru" ? "Открываю..." : "Opening...") : t.client.openCell}
+                                  </Button>
                                   <Button
                                     size="sm"
                                     variant="outline"
@@ -1022,7 +1022,7 @@ export function DriverForm({
                                   <Button
                                     size="sm"
                                     variant="outline"
-                                    onClick={() => handleOpenCell(order.order_id, order.source_cell_id)}
+                                    onClick={() => handleOpenCell(order.order_id, order.dest_cell_id)}
                                     disabled={!selectedDriverId || orderStates[order.order_id]?.isOpeningCell || orderStates[order.order_id]?.isClosingCell || orderStates[order.order_id]?.isRequestingError || !pins[order.order_id]}
                                   >
                                     {orderStates[order.order_id]?.isOpeningCell ? (language === "ru" ? "Открываю..." : "Opening...") : t.client.openCell}
@@ -1059,15 +1059,6 @@ export function DriverForm({
                   </Table>
                 </div>
                 <div className="flex gap-2 mt-3">
-                  {tripState === "at_from_locker" && (
-                    <Button
-                      size="sm"
-                      onClick={handleTakeSelectedOrders}
-                      disabled={selectedDirectOrders.length === 0}
-                    >
-                      {t.driver.takeSelected}
-                    </Button>
-                  )}
                   <Button
                     size="sm"
                     variant="default"
@@ -1223,31 +1214,20 @@ export function DriverForm({
                       </div>
                     )}
                 <div className="flex gap-2 mt-3">
-                  {tripState === "at_from_locker" && (
-                    <Button
-                      size="sm"
-                      onClick={handleTakeSelectedOrders}
-                      disabled={selectedDirectOrders.length === 0}
-                    >
-                      {t.driver.takeSelected}
-                    </Button>
-                  )}
                   <Button
                     size="sm"
                     variant="default"
                     onClick={() => handleStartTripByDirection(currentDirectionId)}
-                  >
+                  > 
                     {t.driver.startTrip}
                   </Button>
-                  {tripState === "in_transit" && (
-                    <Button
-                      size="sm"
-                      onClick={() => handleStartTrip(tripData?.trip_id)}
-                      disabled={!selectedDriverId}
-                    >
-                      {t.driver.completeTrip || "Завершение рейса"}
-                    </Button>
-                  )}
+                  <Button
+                    size="sm"
+                    onClick={handleCompleteTrip}
+                    disabled={!selectedDriverId}
+                  >
+                    {t.driver.completeTrip || "Завершение рейса"}
+                  </Button>
                 </div>
                   </div>
                 </>

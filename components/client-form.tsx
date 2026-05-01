@@ -1,5 +1,5 @@
 "use client"
-import { useEffect, useState, useRef } from "react"
+import { useEffect, useState, useRef, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { Input } from "@/components/ui/input"
@@ -11,6 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { useLanguage } from "@/lib/language-context"
 import { fetchOrdersByClient, fetchUsers, enqueueFsmRequest, makeFsmEnqueueRequest, fetchAccessCodeView, subscribeToFsmInstanceEvents } from "@/lib/api"
 import { performCellOperation } from "@/lib/utils"
+import { getLegFromStatus } from "@/lib/cell-operations"
 import { SSEErrorTracker } from "@/components/sse-error-tracker"
 
 export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
@@ -76,27 +77,34 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
     }
   };
 
-  const loadClientOrders = async () => {
+  const loadClientOrders = useCallback(async () => {
     if (isRefreshingClient) return;
     setIsRefreshingClient(true);
     try {
       const orders = await fetchOrdersByClient(selectedClientId);
-      const processedOrders = orders.map((order: any) => ({
-        id: order.id,
-        description: order.description || `Order ${order.id}`,
-        status: order.status,
-        canCancel: order.status !== 'cancelled' && order.status !== 'completed',
-        pickupType: order.pickup_type,
-        pin: "",
-        isSubmittingError: false,
-      }));
-      setClientOrders(processedOrders);
+      // Сохраняем существующие pin и accessCode при перезагрузке через functional update
+      setClientOrders(prevOrders => {
+        const processedOrders = orders.map((order: any) => {
+          const existingOrder = prevOrders.find(o => o.id === order.id);
+          return {
+            id: order.id,
+            description: order.description || `Order ${order.id}`,
+            status: order.status,
+            canCancel: order.status !== 'cancelled' && order.status !== 'completed',
+            pickupType: order.pickup_type,
+            pin: existingOrder?.pin || order.pin || "",
+            accessCode: existingOrder?.accessCode || order.accessCode || undefined,
+            isSubmittingError: false,
+          };
+        });
+        return processedOrders;
+      });
     } catch (error) {
       console.error('Error loading client orders:', error);
     } finally {
       setIsRefreshingClient(false);
     }
-  };
+  }, [selectedClientId, isRefreshingClient]);
 
   // Удалено - больше не используется
   // const loadClientFsmError = async () => { ... }
@@ -157,24 +165,17 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
   }, []);
 
   useEffect(() => {
-    if (selectedClientId) {
-      setOrderMessage(null);
-      loadClientOrders();
-    } else {
-      setOrderMessage(null);
-      setClientOrders([]);
-    }
-  }, [selectedClientId]);
-
-  useEffect(() => {
     if (!selectedClientId) return;
+
+    // Запускаем сразу при смене selectedClientId
+    loadClientOrders();
 
     const interval = setInterval(() => {
       loadClientOrders();
     }, 20000); // 20 seconds
 
     return () => clearInterval(interval);
-  }, [selectedClientId]);
+  }, [selectedClientId, loadClientOrders]);
 
   useEffect(() => {
     if (parcelType === "letter") {
@@ -356,7 +357,9 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
     );
 
     try {
-      const result = await fetchAccessCodeView(orderId, "pickup", parseInt(selectedClientId));
+      const order = clientOrders.find(o => o.id === orderId);
+      const leg = getLegFromStatus(order?.status || "");
+      const result = await fetchAccessCodeView(orderId, leg, parseInt(selectedClientId));
       console.log('[handleGetAccessCode] Result:', result);
       
       // PIN может быть в result.pin или result.data.pin
@@ -367,8 +370,8 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
         prev.map(order =>
           order.id === orderId ? { 
             ...order, 
-            accessCode: code,
-            pin: pin,
+            accessCode: code || order.accessCode,
+            pin: pin || order.pin,
             isGettingCode: false 
           } : order
         )
@@ -396,16 +399,19 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
 
     try {
       console.log('Sending open_cell request');
-      const result = await performCellOperation(orderId, parseInt(selectedClientId), "open_cell", { pin: order.pin }, "client");
+      const leg = getLegFromStatus(order.status);
+      const result = await performCellOperation(orderId, parseInt(selectedClientId), "open_cell", { pin: order.pin, leg }, "client");
       console.log('open_cell result:', result);
       addLog({
         role: "client",
         action: "open_cell",
         data: result,
-      });      const instanceId = result?.data?.instance_id || result?.instance_id;
+      });
+      const instanceId = result?.data?.instance_id || result?.instance_id;
       if (instanceId) {
         setCurrentInstanceId(instanceId);
-      }    } catch (error) {
+      }
+    } catch (error) {
       console.error('Error opening cell:', error);
     } finally {
       setClientOrders(prev =>
@@ -424,7 +430,9 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
     );
 
     try {
-      const result = await performCellOperation(orderId, parseInt(selectedClientId), "close_cell", {}, "client");
+      const order = clientOrders.find(o => o.id === orderId);
+      const leg = getLegFromStatus(order?.status || "");
+      const result = await performCellOperation(orderId, parseInt(selectedClientId), "close_cell", { leg }, "client");
       addLog({
         role: "client",
         action: "close_cell",
