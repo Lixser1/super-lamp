@@ -540,10 +540,10 @@ export function ClientForm({ addLog }: { addLog: (log: any) => void }) {
     </SelectTrigger>
     <SelectContent>
       {users
-        .filter(user => user.role_name === "recipient")
+        .filter(user => user.role_name === "client")
         .map((user) => (
           <SelectItem key={user.id} value={user.id.toString()}>
-            {language === "ru" ? "Получатель" : "Recipient"} #{user.id} {user.city ? `(${user.city})` : ""}
+            {language === "ru" ? "Клиент" : "Client"} #{user.id} {user.city ? `(${user.city})` : ""}
           </SelectItem>
         ))}
     </SelectContent>

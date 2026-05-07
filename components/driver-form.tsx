@@ -866,7 +866,7 @@ export function DriverForm({
                                   <Button
                                     size="sm"
                                     variant="outline"
-                                    onClick={() => handleOpenCell(order.order_id, order.dest_cell_id)}
+                                    onClick={() => handleOpenCell(order.order_id, order.source_cell_id)}
                                     disabled={!selectedDriverId || orderStates[order.order_id]?.isOpeningCell || orderStates[order.order_id]?.isClosingCell || orderStates[order.order_id]?.isRequestingError || !pins[order.order_id]}
                                   >
                                     {orderStates[order.order_id]?.isOpeningCell ? (language === "ru" ? "Открываю..." : "Opening...") : t.client.openCell}
@@ -874,7 +874,7 @@ export function DriverForm({
                                   <Button
                                     size="sm"
                                     variant="outline"
-                                    onClick={() => handleCloseCell(order.order_id, order.dest_cell_id)}
+                                    onClick={() => handleCloseCell(order.order_id, order.source_cell_id)}
                                     disabled={!selectedDriverId || orderStates[order.order_id]?.isClosingCell || orderStates[order.order_id]?.isOpeningCell || orderStates[order.order_id]?.isRequestingError}
                                   >
                                     {orderStates[order.order_id]?.isClosingCell ? (language === "ru" ? "Закрываю..." : "Closing...") : t.client.closeCell}
@@ -1022,7 +1022,7 @@ export function DriverForm({
                                   <Button
                                     size="sm"
                                     variant="outline"
-                                    onClick={() => handleOpenCell(order.order_id, order.dest_cell_id)}
+                                    onClick={() => handleOpenCell(order.order_id, order.source_cell_id)}
                                     disabled={!selectedDriverId || orderStates[order.order_id]?.isOpeningCell || orderStates[order.order_id]?.isClosingCell || orderStates[order.order_id]?.isRequestingError || !pins[order.order_id]}
                                   >
                                     {orderStates[order.order_id]?.isOpeningCell ? (language === "ru" ? "Открываю..." : "Opening...") : t.client.openCell}
@@ -1030,7 +1030,7 @@ export function DriverForm({
                                   <Button
                                     size="sm"
                                     variant="outline"
-                                    onClick={() => handleCloseCell(order.order_id, order.dest_cell_id)}
+                                    onClick={() => handleCloseCell(order.order_id, order.source_cell_id)}
                                     disabled={!selectedDriverId || orderStates[order.order_id]?.isClosingCell || orderStates[order.order_id]?.isOpeningCell || orderStates[order.order_id]?.isRequestingError}
                                   >
                                     {orderStates[order.order_id]?.isClosingCell ? (language === "ru" ? "Закрываю..." : "Closing...") : t.client.closeCell}
