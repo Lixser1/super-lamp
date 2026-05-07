@@ -44,6 +44,35 @@ export function getRemoveExecutorProcessAndLeg(status: string): { process_name: 
 }
 
 /**
+ * Возвращает ID курьера, которого нужно снять, на основе статуса заказа
+ * @param status - статус заказа
+ * @param deliveryCourierId - ID курьера для leg delivery
+ * @param pickupCourierId - ID курьера для leg pickup
+ * @returns ID курьера или null если снять некого
+ */
+export function getRemoveExecutorTargetCourierId(
+  status: string,
+  deliveryCourierId: number | string | null | undefined,
+  pickupCourierId: number | string | null | undefined,
+): number | null {
+  const normalize = (value: number | string | null | undefined): number | null => {
+    if (value === null || value === undefined) return null
+    const id = Number(value)
+    return Number.isFinite(id) ? id : null
+  }
+
+  if (status === 'order_courier2_assigned') {
+    return normalize(deliveryCourierId)
+  }
+
+  if (status === 'order_courier1_assigned') {
+    return normalize(pickupCourierId)
+  }
+
+  return null;
+}
+
+/**
  * Определяет process_name и leg для назначения курьера на основе статуса заказа
  * @param status - статус заказа
  * @returns process_name и leg для assign_executor

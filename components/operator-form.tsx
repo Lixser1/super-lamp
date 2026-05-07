@@ -11,7 +11,7 @@ import { useLanguage } from "@/lib/language-context"
 import { mockDriverExchangeOrders, mockDriverAssignedOrders } from "@/lib/mock-data"
 import { fetchOperatorTrips, fetchOperatorLockers, fetchUsers, enqueueFsmRequest, fetchAccessCodeView, subscribeToFsmInstanceEvents, fetchFsmUserErrorsFiltered, createAssignExecutorRequest, createRemoveExecutorRequest } from "@/lib/api"
 import { performCellOperation } from "@/lib/utils"
-import { getLegFromStatus, getAssignExecutorProcessAndLeg, getRemoveExecutorProcessAndLeg } from "@/lib/cell-operations"
+import { getLegFromStatus, getAssignExecutorProcessAndLeg, getRemoveExecutorProcessAndLeg, getRemoveExecutorTargetCourierId } from "@/lib/cell-operations"
 import { SSEErrorTracker } from "@/components/sse-error-tracker"
 
 interface OperatorFormProps {
@@ -423,9 +423,18 @@ export function OperatorForm({
 
   const handleRemoveCourier = async (order: any) => {
     const orderId = order.order_id
-    const courierId = order.delivery_courier_id
     const status = order.status
-    
+    const courierId = getRemoveExecutorTargetCourierId(
+      status,
+      order.delivery_courier_id,
+      order.pickup_courier_id,
+    )
+
+    if (courierId === null || courierId === undefined) {
+      console.warn('No removable courier for order', orderId, status)
+      return
+    }
+
     // Определяем process_name и leg на основе статуса заказа:
     // - "order_courier2_assigned" для postamatu2 -> "delivery"
     // - "order_courier1_assigned" для postamatu1 -> "pickup"
@@ -887,7 +896,12 @@ export function OperatorForm({
                                     const diffHours = Math.floor(diffMs / (1000 * 60 * 60))
                                     const diffMinutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60))
                                     
-                                    const hasCourier = order.delivery_courier_id !== null && order.delivery_courier_id !== undefined
+                                    const removableCourierId = getRemoveExecutorTargetCourierId(
+                                      order.status,
+                                      order.delivery_courier_id,
+                                      order.pickup_courier_id,
+                                    )
+                                    const hasCourier = removableCourierId !== null && removableCourierId !== undefined
 
                                     // Фильтруем пользователей по роли courier
                                     const couriers = users?.filter((u: any) => {
@@ -923,7 +937,7 @@ export function OperatorForm({
                                             <div className="flex flex-col gap-2">
                                               <div className="flex items-center gap-2">
                                                 <span className="text-sm">
-                                                  {language === "ru" ? "Курьер" : "Courier"} #{order.delivery_courier_id}
+                                                  {language === "ru" ? "Курьер" : "Courier"} #{removableCourierId}
                                                 </span>
                                                 <Button
                                                   size="sm"
@@ -940,7 +954,7 @@ export function OperatorForm({
                                                   <Button
                                                     size="sm"
                                                     variant="outline"
-                                                    onClick={() => handleRequestCode(order.order_id, order.dest_cell_id, order.status, order.delivery_courier_id)}
+                                                    onClick={() => handleRequestCode(order.order_id, order.dest_cell_id, order.status, removableCourierId)}
                                                     disabled={!operatorId || orderCellStates[order.order_id]?.isRequestingCode || orderCellStates[order.order_id]?.isGettingCode || orderCellStates[order.order_id]?.isOpeningCell || orderCellStates[order.order_id]?.isClosingCell || orderCellStates[order.order_id]?.isRequestingError}
                                                   >
                                                     {orderCellStates[order.order_id]?.isRequestingCode ? (language === "ru" ? "Запрос..." : "Request...") : (language === "ru" ? "Запросить код" : "Request Code")}
@@ -948,7 +962,7 @@ export function OperatorForm({
                                                   <Button
                                                     size="sm"
                                                     variant="outline"
-                                                    onClick={() => handleGetCode(order.order_id, order.dest_cell_id, order.status, order.delivery_courier_id)}
+                                                    onClick={() => handleGetCode(order.order_id, order.dest_cell_id, order.status, removableCourierId)}
                                                     disabled={!operatorId || orderCellStates[order.order_id]?.isGettingCode || orderCellStates[order.order_id]?.isRequestingCode}
                                                   >
                                                     {orderCellStates[order.order_id]?.isGettingCode ? (language === "ru" ? "Получ..." : "Getting...") : (language === "ru" ? "Получить код" : "Get Code")}
@@ -972,7 +986,7 @@ export function OperatorForm({
                                                   <Button
                                                     size="sm"
                                                     variant="outline"
-                                                    onClick={() => handleOpenCell(order.order_id, order.dest_cell_id, order.status, order.delivery_courier_id)}
+                                                    onClick={() => handleOpenCell(order.order_id, order.dest_cell_id, order.status, removableCourierId)}
                                                     disabled={!operatorId || orderCellStates[order.order_id]?.isOpeningCell || orderCellStates[order.order_id]?.isClosingCell || orderCellStates[order.order_id]?.isRequestingError || !pins[order.order_id]}
                                                   >
                                                     {orderCellStates[order.order_id]?.isOpeningCell ? (language === "ru" ? "Открываю..." : "Opening...") : (language === "ru" ? "Открыть" : "Open")}
@@ -980,7 +994,7 @@ export function OperatorForm({
                                                   <Button
                                                     size="sm"
                                                     variant="outline"
-                                                    onClick={() => handleCloseCell(order.order_id, order.dest_cell_id, order.status, order.delivery_courier_id)}
+                                                    onClick={() => handleCloseCell(order.order_id, order.dest_cell_id, order.status, removableCourierId)}
                                                     disabled={!operatorId || orderCellStates[order.order_id]?.isClosingCell || orderCellStates[order.order_id]?.isOpeningCell || orderCellStates[order.order_id]?.isRequestingError}
                                                   >
                                                     {orderCellStates[order.order_id]?.isClosingCell ? (language === "ru" ? "Закрываю..." : "Closing...") : (language === "ru" ? "Закрыть" : "Close")}
@@ -988,7 +1002,7 @@ export function OperatorForm({
                                                   <Button
                                                     size="sm"
                                                     variant="destructive"
-                                                    onClick={() => handleCellError(order.order_id, order.dest_cell_id, order.status, order.delivery_courier_id)}
+                                                    onClick={() => handleCellError(order.order_id, order.dest_cell_id, order.status, removableCourierId)}
                                                     disabled={!operatorId || orderCellStates[order.order_id]?.isRequestingError || orderCellStates[order.order_id]?.isOpeningCell || orderCellStates[order.order_id]?.isClosingCell}
                                                   >
                                                     {orderCellStates[order.order_id]?.isRequestingError ? (language === "ru" ? "Отпр..." : "Sending...") : (language === "ru" ? "Ошибка" : "Error")}

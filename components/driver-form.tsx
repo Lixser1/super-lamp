@@ -210,6 +210,13 @@ export function DriverForm({
           trips.forEach((trip: any) => {
             if (trip.orders && Array.isArray(trip.orders)) {
               trip.orders.forEach((order: any) => {
+                console.log('Order data:', {
+                  order_id: order.order_id,
+                  source_cell_id: order.source_cell_id,
+                  dest_cell_id: order.dest_cell_id,
+                  pickup_locker_id: trip.pickup_locker_id,
+                  delivery_locker_id: trip.delivery_locker_id
+                });
                 allOrders.push({
                   order_id: order.order_id,
                   trip_id: trip.id,
@@ -856,13 +863,13 @@ export function DriverForm({
                               onChange={(e) => setPins({ ...pins, [order.order_id]: e.target.value })}
                               className="w-20 h-8 text-xs"
                             />
-                            <Button
-                              size="sm"
-                              onClick={() => handleGetAccessCode(order.order_id)}
-                              disabled={!selectedDriverId || orderStates[order.order_id]?.isGettingCode || orderStates[order.order_id]?.isRequestingCode}
-                            >
-                              {orderStates[order.order_id]?.isGettingCode ? (language === "ru" ? "Получаю..." : "Getting...") : (language === "ru" ? "Получить код" : "Get code")}
-                            </Button>
+                                  <Button
+                                    size="sm"
+                                    onClick={() => handleGetAccessCode(order.order_id)}
+                                    disabled={!selectedDriverId || orderStates[order.order_id]?.isGettingCode || orderStates[order.order_id]?.isRequestingCode}
+                                  >
+                                    {orderStates[order.order_id]?.isGettingCode ? (language === "ru" ? "Получаю..." : "Getting...") : (language === "ru" ? "Получить код" : "Get code")}
+                                  </Button>
                                   <Button
                                     size="sm"
                                     variant="outline"
@@ -989,7 +996,7 @@ export function DriverForm({
                             <TableCell>{order.description}</TableCell>
                             <TableCell>{order.source_cell_id}</TableCell>
                             <TableCell>{order.dest_cell_id}</TableCell>
-                            <TableCell>
+                              <TableCell>
                               <div className="flex flex-col gap-2">
                                 {orderStates[order.order_id]?.accessCode && (
                                   <div className="text-xs">
@@ -1022,7 +1029,7 @@ export function DriverForm({
                                   <Button
                                     size="sm"
                                     variant="outline"
-                                    onClick={() => handleOpenCell(order.order_id, order.source_cell_id)}
+                                    onClick={() => handleOpenCell(order.order_id, order.dest_cell_id)}
                                     disabled={!selectedDriverId || orderStates[order.order_id]?.isOpeningCell || orderStates[order.order_id]?.isClosingCell || orderStates[order.order_id]?.isRequestingError || !pins[order.order_id]}
                                   >
                                     {orderStates[order.order_id]?.isOpeningCell ? (language === "ru" ? "Открываю..." : "Opening...") : t.client.openCell}
@@ -1030,7 +1037,7 @@ export function DriverForm({
                                   <Button
                                     size="sm"
                                     variant="outline"
-                                    onClick={() => handleCloseCell(order.order_id, order.source_cell_id)}
+                                    onClick={() => handleCloseCell(order.order_id, order.dest_cell_id)}
                                     disabled={!selectedDriverId || orderStates[order.order_id]?.isClosingCell || orderStates[order.order_id]?.isOpeningCell || orderStates[order.order_id]?.isRequestingError}
                                   >
                                     {orderStates[order.order_id]?.isClosingCell ? (language === "ru" ? "Закрываю..." : "Closing...") : t.client.closeCell}
@@ -1038,7 +1045,7 @@ export function DriverForm({
                                   <Button
                                     size="sm"
                                     variant="destructive"
-                                    onClick={() => handleRequestError(order.order_id, order.source_cell_id)}
+                                    onClick={() => handleRequestError(order.order_id, order.dest_cell_id)}
                                     disabled={!selectedDriverId || orderStates[order.order_id]?.isRequestingError || orderStates[order.order_id]?.isOpeningCell || orderStates[order.order_id]?.isClosingCell}
                                   >
                                     {orderStates[order.order_id]?.isRequestingError ? (language === "ru" ? "Отправка..." : "Sending...") : t.client.error}
