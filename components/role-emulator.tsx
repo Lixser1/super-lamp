@@ -1152,6 +1152,16 @@ console.log('[filteredAvailableOrders] Filter:', ordersFilter, 'Total:', availab
     }
   }
 
+  // Массив ролей для Tabs
+  const roleTabs = [
+    { value: "client", label: t.roles.client },
+    { value: "recipient", label: t.roles.recipient },
+    { value: "courier", label: t.roles.courier },
+    { value: "driver", label: t.roles.driver },
+    { value: "operator", label: t.roles.operator },
+    { value: "fsm", label: t.roles.fsm },
+  ]
+
   const handleRecipientLookup = async () => {
     if (!recipientOrderId) return;
 
@@ -1343,42 +1353,15 @@ console.log('[filteredAvailableOrders] Filter:', ordersFilter, 'Total:', availab
         onValueChange={(value) => onTabChange?.(value)}
       >
         <TabsList className="w-full justify-start px-4 pt-2 bg-background">
-          <TabsTrigger
-            value="client"
-            className={highlightedTab === "client" ? "animate-pulse bg-primary text-primary-foreground" : ""}
-          >
-            {t.roles.client}
-          </TabsTrigger>
-          <TabsTrigger
-            value="recipient"
-            className={highlightedTab === "recipient" ? "animate-pulse bg-primary text-primary-foreground" : ""}
-          >
-            {t.roles.recipient}
-          </TabsTrigger>
-          <TabsTrigger
-            value="courier"
-            className={highlightedTab === "courier" ? "animate-pulse bg-primary text-primary-foreground" : ""}
-          >
-            {t.roles.courier}
-          </TabsTrigger>
-          <TabsTrigger
-            value="driver"
-            className={highlightedTab === "driver" ? "animate-pulse bg-primary text-primary-foreground" : ""}
-          >
-            {t.roles.driver}
-          </TabsTrigger>
-          <TabsTrigger
-            value="operator"
-            className={highlightedTab === "operator" ? "animate-pulse bg-primary text-primary-foreground" : ""}
-          >
-            {t.roles.operator}
-          </TabsTrigger>
-          <TabsTrigger
-            value="fsm"
-            className={highlightedTab === "fsm" ? "animate-pulse bg-primary text-primary-foreground" : ""}
-          >
-            {t.roles.fsm}
-          </TabsTrigger>
+          {roleTabs.map((role) => (
+            <TabsTrigger
+              key={role.value}
+              value={role.value}
+              className={highlightedTab === role.value ? "animate-pulse bg-primary text-primary-foreground" : ""}
+            >
+              {role.label}
+            </TabsTrigger>
+          ))}
         </TabsList>
 
         <div className="flex-1 overflow-auto p-4">

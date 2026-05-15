@@ -639,14 +639,14 @@ export function RecipientForm({
                               <Button
                                 size="sm"
                                 onClick={() => handleRequestAccessCodeForOrder(order)}
-                                disabled={order.isRequestingCode || order.isGettingCode || order.isSubmittingError || order.isOpeningCell || order.isClosingCell || (order.delivery_type === 'courier' && order.status !== 'order_courier2_parcel_delivered') || (order.delivery_type === 'self' && order.status !== 'order_parcel_confirmed_post2')}
+                                disabled={order.status !== "order_parcel_confirmed_post2" && order.status !== "order_delivered_to_client"}
                               >
                                 {order.isRequestingCode ? (language === "ru" ? "Запрос..." : "Requesting...") : (language === "ru" ? "Запросить код" : "Request code")}
                               </Button>
                               <Button
                                 size="sm"
                                 onClick={() => handleGetOrderAccessCode(order)}
-                                disabled={order.isGettingCode || order.isRequestingCode || order.isSubmittingError || order.isOpeningCell || order.isClosingCell || (order.delivery_type === 'courier' && order.status !== 'order_courier2_parcel_delivered') || (order.delivery_type === 'self' && order.status !== 'order_parcel_confirmed_post2')}
+                                disabled={order.status !== "order_parcel_confirmed_post2" && order.status !== "order_delivered_to_client"}
                               >
                                 {order.isGettingCode ? (language === "ru" ? "Получаю..." : "Getting...") : (language === "ru" ? "Получить код" : "Get code")}
                               </Button>
@@ -667,7 +667,7 @@ export function RecipientForm({
                                 size="sm"
                                 variant="outline"
                                 onClick={() => handleOpenOrderCell(order)}
-                                disabled={order.isOpeningCell || order.isClosingCell || order.isSubmittingError || order.delivery_type == 'self' || (order.status == 'order_parcel_confirmed_post2' && order.status == 'order_delivered_to_client') || !order.pin}
+                                disabled={!(order.delivery_type === 'self' && order.status === 'order_parcel_confirmed_post2')}
                               >
                                 {order.isOpeningCell ? (language === "ru" ? "Открываю..." : "Opening...") : (language === "ru" ? "Открыть ячейку" : "Open cell")}
                               </Button>
@@ -675,7 +675,7 @@ export function RecipientForm({
                                 size="sm"
                                 variant="outline"
                                 onClick={() => handleCloseOrderCell(order)}
-                                disabled={order.isClosingCell || order.isOpeningCell || order.isSubmittingError || order.delivery_type !== 'self' || order.status !== 'order_delivered_to_client'}
+                                disabled={!(order.delivery_type === 'self' && order.status === 'order_delivered_to_client')}
                               >
                                 {order.isClosingCell ? (language === "ru" ? "Закрываю..." : "Closing...") : (language === "ru" ? "Закрыть ячейку" : "Close cell")}
                               </Button>
